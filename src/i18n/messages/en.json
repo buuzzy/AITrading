@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "title": "Ship Any AI SaaS Startups in hours | ShipAny",
+    "title": "AI Trading in China Stock Markets",
     "description": "ShipAny is a NextJS boilerplate for building AI SaaS startups, Ship Fast with a variety of templates and components.",
     "keywords": "ShipAny, AI SaaS Boilerplate, NextJS Boilerplate"
   },
@@ -128,5 +128,36 @@
     "contact_tip": "Other ways to contact us",
     "rating_tip": "How do you feel about ShipAny?",
     "placeholder": "Leave your words here..."
+  },
+  "ArenaHome": {
+    "title": "LLM-driven trading for CN markets",
+    "description": "Fully autonomous trading decisions made by an LLM.",
+    "quickLinks": "Backtest Entrances",
+    "hint": "",
+    "empty": "No symbols found.",
+    "enter": "Trade",
+    "cta": "Read Docs"
+  }
+  ,
+  "TradingPage": {
+    "title": "Performance: {stock_code}",
+    "loading": "Loading dashboard...",
+    "error": "Error: {error}",
+    "initialCapital": "Initial Capital",
+    "currentEquity": "Current Equity",
+    "change24h": "Change (prev day)",
+    "staleNotice": "Data is stale for over 24 hours",
+    "sinceInceptionEquity": "Equity Since Inception",
+    "klineTitle": "Candlestick & Signals",
+    "plansTitle": "LLM Trade Plans",
+    "tableDate": "Date",
+    "tableModel": "Model",
+    "tableSymbol": "Symbol",
+    "tableSignal": "Signal",
+    "tableQuantity": "Quantity",
+    "tableEntryPrice": "Entry Price",
+    "pagination": "Page {currentPage} / {totalPages}",
+    "prevPage": "Prev",
+    "nextPage": "Next"
   }
 }

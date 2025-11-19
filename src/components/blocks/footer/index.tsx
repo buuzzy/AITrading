@@ -12,10 +12,14 @@ export default function Footer({ footer }: { footer: FooterType }) {
       <div className="max-w-7xl mx-auto px-8">
         <footer>
           <div className="flex flex-col items-center justify-between gap-10 text-center lg:flex-row lg:text-left">
+            {/**
+             * 临时注释：品牌 Logo/标题/描述 + 社交链接
+             */}
+            {/**
             <div className="flex w-full max-w-96 shrink flex-col items-center justify-between gap-6 lg:items-start">
               {footer.brand && (
                 <div>
-                  <div className="flex items-center justify-center gap-2 lg:justify-start">
+                  <div className="flex items中心 justify-center gap-2 lg:justify-start">
                     {footer.brand.logo && (
                       <img
                         src={footer.brand.logo.src}
@@ -50,6 +54,12 @@ export default function Footer({ footer }: { footer: FooterType }) {
                 </ul>
               )}
             </div>
+            */}
+
+            {/**
+             * 临时注释：导航分栏（关于、资源、友情链接等）
+             */}
+            {/**
             <div className="grid grid-cols-3 gap-6 lg:gap-20">
               {footer.nav?.items?.map((item, i) => (
                 <div key={i}>
@@ -66,7 +76,12 @@ export default function Footer({ footer }: { footer: FooterType }) {
                 </div>
               ))}
             </div>
+            */}
           </div>
+          {/**
+           * 临时注释：底部版权与协议（免责声明、隐私政策等）
+           */}
+          {/**
           <div className="mt-8 flex flex-col justify-between gap-4 border-t pt-8 text-center text-sm font-medium text-muted-foreground lg:flex-row lg:items-center lg:text-left">
             {footer.copyright && (
               <p>
@@ -95,6 +110,7 @@ export default function Footer({ footer }: { footer: FooterType }) {
               </ul>
             )}
           </div>
+          */}
         </footer>
       </div>
     </section>

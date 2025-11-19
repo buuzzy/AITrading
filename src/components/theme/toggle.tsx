@@ -10,6 +10,15 @@ export default function ThemeToggle() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    if (!mounted) return;
+    const el = document.documentElement;
+    if (resolvedTheme === "dark") {
+      el.setAttribute("data-theme", "dark");
+    } else {
+      el.setAttribute("data-theme", "cupcake");
+    }
+  }, [mounted, resolvedTheme]);
   if (!mounted) return null;
 
   return (
@@ -17,14 +26,20 @@ export default function ThemeToggle() {
       {resolvedTheme === "dark" ? (
         <BsSun
           className="cursor-pointer text-lg text-muted-foreground"
-          onClick={() => setTheme("light")}
+          onClick={() => {
+            setTheme("light");
+            document.documentElement.setAttribute("data-theme", "cupcake");
+          }}
           width={80}
           height={20}
         />
       ) : (
         <BsMoonStars
           className="cursor-pointer text-lg text-muted-foreground"
-          onClick={() => setTheme("dark")}
+          onClick={() => {
+            setTheme("dark");
+            document.documentElement.setAttribute("data-theme", "dark");
+          }}
           width={80}
           height={20}
         />

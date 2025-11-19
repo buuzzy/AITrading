@@ -43,6 +43,15 @@ export default function Header({ header }: { header: HeaderType }) {
       <div className="container">
         <nav className="hidden justify-between lg:flex">
           <div className="flex items-center gap-6">
+            <Link href="/" className="flex items-center gap-2">
+              <Icon name="RiHomeLine" className="size-5 shrink-0" />
+              <span className="text-sm font-semibold">主页</span>
+            </Link>
+            {/**
+             * 临时注释：品牌 Logo 与标题
+             * 需求：仅保留中英文切换与日夜间模式
+             */}
+            {/**
             <Link
               href={(header.brand?.url as any) || "/"}
               className="flex items-center gap-2"
@@ -60,6 +69,12 @@ export default function Header({ header }: { header: HeaderType }) {
                 </span>
               )}
             </Link>
+            */}
+
+            {/**
+             * 临时注释：顶部导航（功能特点、定价、案例、文档等）
+             */}
+            {/**
             <div className="flex items-center">
               <NavigationMenu>
                 <NavigationMenuList>
@@ -142,11 +157,16 @@ export default function Header({ header }: { header: HeaderType }) {
                 </NavigationMenuList>
               </NavigationMenu>
             </div>
+            */}
           </div>
           <div className="shrink-0 flex gap-2 items-center">
             {header.show_locale && <LocaleToggle />}
             {header.show_theme && <ThemeToggle />}
 
+            {/**
+             * 临时注释：获取 ShipAny 等操作按钮 + 登录入口
+             */}
+            {/**
             {header.buttons?.map((item, i) => {
               return (
                 <Button key={i} variant={item.variant}>
@@ -164,11 +184,14 @@ export default function Header({ header }: { header: HeaderType }) {
               );
             })}
             {header.show_sign && <SignToggle />}
+            */}
           </div>
         </nav>
 
         <div className="block lg:hidden">
           <div className="flex items-center justify-between">
+            {/** 临时注释：移动端品牌 Logo 与标题 */}
+            {/**
             <Link
               href={(header.brand?.url || "/") as any}
               className="flex items-center gap-2"
@@ -186,6 +209,7 @@ export default function Header({ header }: { header: HeaderType }) {
                 </span>
               )}
             </Link>
+            */}
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="default" size="icon">
@@ -195,6 +219,12 @@ export default function Header({ header }: { header: HeaderType }) {
               <SheetContent className="overflow-y-auto">
                 <SheetHeader>
                   <SheetTitle>
+                    <Link href="/" className="flex items-center gap-2">
+                      <Icon name="RiHomeLine" className="size-5 shrink-0" />
+                      <span className="text-sm font-semibold">主页</span>
+                    </Link>
+                    {/** 临时注释：移动端抽屉中的品牌区块 */}
+                    {/**
                     <Link
                       href={(header.brand?.url || "/") as any}
                       className="flex items-center gap-2"
@@ -212,9 +242,12 @@ export default function Header({ header }: { header: HeaderType }) {
                         </span>
                       )}
                     </Link>
+                    */}
                   </SheetTitle>
                 </SheetHeader>
                 <div className="mb-8 mt-8 flex flex-col gap-4">
+                  {/** 临时注释：移动端导航（功能特点、定价、案例、文档等） */}
+                  {/**
                   <Accordion type="single" collapsible className="w-full">
                     {header.nav?.items?.map((item, i) => {
                       if (item.children && item.children.length > 0) {
@@ -275,10 +308,13 @@ export default function Header({ header }: { header: HeaderType }) {
                       );
                     })}
                   </Accordion>
+                  */}
                 </div>
                 <div className="flex-1"></div>
                 <div className="border-t pt-4">
                   <div className="mt-2 flex flex-col gap-3">
+                    {/** 临时注释：移动端操作按钮 + 登录入口 */}
+                    {/**
                     {header.buttons?.map((item, i) => {
                       return (
                         <Button key={i} variant={item.variant}>
@@ -300,6 +336,7 @@ export default function Header({ header }: { header: HeaderType }) {
                     })}
 
                     {header.show_sign && <SignToggle />}
+                    */}
                   </div>
 
                   <div className="mt-4 flex items-center gap-2">

@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "title": "几小时内构建任何 AI SaaS 创业项目 | ShipAny",
+    "title": "AI Trading in China Stock Markets",
     "description": "ShipAny 是一个用于构建 AI SaaS 创业项目的 NextJS 模板，提供各种模板和组件，帮助您快速启动。",
     "keywords": "ShipAny, AI SaaS 模板, NextJS 模板"
   },
@@ -128,5 +128,35 @@
     "contact_tip": "其他联系方式",
     "rating_tip": "您对 ShipAny 的看法如何？",
     "placeholder": "在这里留下您的反馈..."
+  },
+  "ArenaHome": {
+    "title": "AI Trading in real A-shares markets",
+    "description": "完全由 LLM 进行自主交易决策",
+    "quickLinks": "回测入口",
+    "hint": "",
+    "empty": "未发现标的。",
+    "enter": "进入交易",
+    "cta": "阅读文档"
+  },
+  "TradingPage": {
+    "title": "交易表现: {stock_code}",
+    "loading": "正在加载仪表盘...",
+    "error": "错误: {error}",
+    "initialCapital": "初始资金",
+    "currentEquity": "当前权益",
+    "change24h": "上一日变化",
+    "staleNotice": "数据超过24小时未更新",
+    "sinceInceptionEquity": "初始至今权益",
+    "klineTitle": "K线图与信号",
+    "plansTitle": "LLM 交易计划",
+    "tableDate": "日期",
+    "tableModel": "模型",
+    "tableSymbol": "代码",
+    "tableSignal": "信号",
+    "tableQuantity": "数量",
+    "tableEntryPrice": "入场价格",
+    "pagination": "第 {currentPage} 页 / 共 {totalPages} 页",
+    "prevPage": "上一页",
+    "nextPage": "下一页"
   }
 }

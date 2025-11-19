@@ -8,6 +8,8 @@ import { Metadata } from "next";
 import { NextAuthSessionProvider } from "@/auth/session";
 import { NextIntlClientProvider } from "next-intl";
 import { ThemeProvider } from "@/providers/theme";
+import Header from "@/components/blocks/header";
+import { getLandingPage } from "@/services/page";
 
 export async function generateMetadata({
   params,
@@ -40,12 +42,16 @@ export default async function LocaleLayout({
   setRequestLocale(locale);
 
   const messages = await getMessages();
+  const page = await getLandingPage(locale);
 
   return (
     <NextIntlClientProvider messages={messages}>
       <NextAuthSessionProvider>
         <AppContextProvider>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider>
+            {page.header && <Header header={page.header} />}
+            {children}
+          </ThemeProvider>
         </AppContextProvider>
       </NextAuthSessionProvider>
     </NextIntlClientProvider>

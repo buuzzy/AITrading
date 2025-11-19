@@ -1,5 +1,4 @@
 import Footer from "@/components/blocks/footer";
-import Header from "@/components/blocks/header";
 import { ReactNode } from "react";
 import { getLandingPage } from "@/services/page";
 import Feedback from "@/components/feedback";
@@ -15,11 +14,10 @@ export default async function DefaultLayout({
   const page = await getLandingPage(locale);
 
   return (
-    <>
-      {page.header && <Header header={page.header} />}
+    <div className="min-h-screen bg-background text-foreground">
       <main className="overflow-x-hidden">{children}</main>
       {page.footer && <Footer footer={page.footer} />}
       {/* <Feedback socialLinks={page.footer?.social?.items} /> */}
-    </>
+    </div>
   );
 }

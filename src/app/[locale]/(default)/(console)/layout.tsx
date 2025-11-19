@@ -40,6 +40,12 @@ export default async function ({ children }: { children: ReactNode }) {
           icon: "RiKey2Line",
           is_active: false,
         },
+        {
+          title: "Trading",
+          url: "/trading",
+          icon: "RiStockLine",
+          is_active: false,
+        },
       ],
     },
   };
