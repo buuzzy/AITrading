@@ -72,6 +72,11 @@ interface KlineData {
   }[];
 }
 
+interface Cashflow {
+  date: string;
+  amount: number;
+}
+
 export default function TradingPage({ params }: { params: Promise<{ stock_code: string }> }) {
   const { stock_code } = use(params);
   const t = useTranslations('TradingPage');
@@ -88,6 +93,7 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
   const [summary, setSummary] = useState<PerformanceSummary | null>(null);
   const [chartData, setChartData] = useState<SinceInceptionValue[]>([]);
   const [klineData, setKlineData] = useState<KlineData | null>(null);
+  const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const xRangeRef = useRef<[string, string] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -155,8 +161,26 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
     }
   };
 
+  const fetchCashflows = async () => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_KEY as string;
+    if (!supabaseUrl || !supabaseKey) return;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { data, error } = await supabase
+      .from('cashflows')
+      .select('date,amount')
+      .eq('symbol', stock_code)
+      .order('date', { ascending: false })
+      .limit(50);
+    if (!error && Array.isArray(data)) {
+      const rows = data.map((r: any) => ({ date: String(r.date), amount: Number(r.amount) }));
+      setCashflows(rows);
+    }
+  };
+
   useEffect(() => {
     fetchAll(false);
+    fetchCashflows();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_KEY as string;
     if (supabaseUrl && supabaseKey) {
@@ -182,6 +206,13 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
           if (now - lastFetchTsRef.current > 1500) {
             lastFetchTsRef.current = now;
             fetchAll(true);
+          }
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'cashflows', filter: `symbol=eq.${stock_code}` }, () => {
+          const now = Date.now();
+          if (now - lastFetchTsRef.current > 1500) {
+            lastFetchTsRef.current = now;
+            fetchCashflows();
           }
         })
         .subscribe();
@@ -324,6 +355,23 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
               {chartData.length > 1 && (
                 <div className="mt-1 text-xs text-muted-foreground">
                   {isZhLocale ? '上一个交易日：' : 'Prev day:'} {new Date(chartData[chartData.length - 2].timestamp).toLocaleDateString(isZhLocale ? 'zh-CN' : 'en-CA')} ，{isZhLocale ? '资金' : 'Equity'}：{formatCurrency(chartData[chartData.length - 2].equity)}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <Card className="bg-background">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">{isZhLocale ? '资金事件' : 'Cashflows'}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {cashflows.length > 0 ? (
+                <div className={`text-2xl font-bold ${cashflows[0].amount >= 0 ? 'text-green-500' : 'text-red-500'}`}>{formatCurrency(cashflows[0].amount)}</div>
+              ) : (
+                <div className="text-2xl font-bold">{isZhLocale ? '无' : 'None'}</div>
+              )}
+              {cashflows.length > 0 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {(isZhLocale ? '最近一次：' : 'Latest: ') + new Date(cashflows[0].date).toLocaleDateString(isZhLocale ? 'zh-CN' : 'en-CA')}
                 </div>
               )}
             </CardContent>
@@ -536,6 +584,36 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
               </div>
             </CardFooter>
           )}
+        </Card>
+      )}
+
+      {!loading && !error && (
+        <Card className="bg-background">
+          <CardHeader>
+            <CardTitle>{isZhLocale ? '资金事件明细' : 'Cashflow Details'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {cashflows.length === 0 ? (
+              <div className="py-10 text-center text-muted-foreground">{isZhLocale ? '暂无资金事件' : 'No cashflows'}</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-1/2 pr-4">{isZhLocale ? '日期' : 'Date'}</TableHead>
+                    <TableHead className="w-1/2 text-right pr-6">{isZhLocale ? '金额' : 'Amount'}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {cashflows.slice(0, 10).map((cf, idx) => (
+                    <TableRow key={idx}>
+                      <TableCell>{new Date(cf.date).toLocaleDateString(isZhLocale ? 'zh-CN' : 'en-CA')}</TableCell>
+                      <TableCell className={`text-right pr-6 ${cf.amount >= 0 ? 'text-green-500' : 'text-red-500'}`}>{formatCurrency(cf.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
         </Card>
       )}
       <dialog id="trade_modal" className="modal">

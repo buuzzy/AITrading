@@ -10,7 +10,10 @@ type Props = {
 export default async function ArenaHome({ locale }: Props) {
   const t = await getTranslations("ArenaHome");
 
-  let stockCodes: string[] = [];
+  const manualLiveCodes: string[] = ["512480"];
+  const manualBacktestCodes: string[] = ["002156", "300033", "300059","300274","600030","600895","601360","603019"];
+  let supabaseCodes: string[] = [];
+  const supabaseSet = new Set<string>();
   const url = (process.env.AITRADE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) as string;
   const key = (process.env.AITRADE_SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_KEY) as string;
   if (url && key) {
@@ -23,12 +26,11 @@ export default async function ArenaHome({ locale }: Props) {
       ]);
       const dmRows: any[] = dmResp.ok ? await dmResp.json() : [];
       const cpRows: any[] = cpResp.ok ? await cpResp.json() : [];
-      const set = new Set<string>();
-      dmRows.forEach((r: any) => { if (r && typeof r.symbol === "string" && r.symbol) set.add(r.symbol); });
-      cpRows.forEach((r: any) => { if (r && typeof r.symbol === "string" && r.symbol) set.add(r.symbol); });
-      stockCodes = Array.from(set).sort();
+      dmRows.forEach((r: any) => { if (r && typeof r.symbol === "string" && r.symbol) supabaseSet.add(r.symbol); });
+      cpRows.forEach((r: any) => { if (r && typeof r.symbol === "string" && r.symbol) supabaseSet.add(r.symbol); });
+      supabaseCodes = Array.from(supabaseSet).sort();
     } catch {
-      stockCodes = [];
+      supabaseCodes = [];
     }
   }
 
@@ -50,6 +52,14 @@ export default async function ArenaHome({ locale }: Props) {
     ? "基于浮点价格成交，计入各类交易手续费，模拟真实交易"
     : "Float-price fills, all fees applied, realistic trade simulation";
 
+  const liveCodes = manualLiveCodes.filter((c) => supabaseSet.has(c));
+  const backtestCodes = manualBacktestCodes.length > 0
+    ? manualBacktestCodes.filter((c) => supabaseSet.has(c))
+    : supabaseCodes;
+  const primaryLiveHref = liveCodes[0]
+    ? `http://localhost:3000/trading/${liveCodes[0]}`
+    : `http://localhost:3000/trading/512480`;
+
   return (
     <div>
       <section className="hero min-h-[30rem] rounded bg-base-200">
@@ -57,20 +67,46 @@ export default async function ArenaHome({ locale }: Props) {
           <div className="max-w-2xl">
             <h3 className="text-5xl font-bold">{heroTitle}</h3>
             <p className="py-6 text-lg">{heroSub}</p>
-            <Link href={`/${locale}/trading/600895`} className="btn btn-primary">{btnText}</Link>
+            <Link href={primaryLiveHref} className="btn btn-primary">{btnText}</Link>
           </div>
         </div>
       </section>
 
-      <section className="container pb-20">
+      <section className="container py-16">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">{isZh ? "实盘入口" : "Live Trading"}</h2>
+        </div>
+        {liveCodes.length === 0 ? (
+          <div className="mt-4 text-sm text-base-content/60">{t("empty")}</div>
+        ) : (
+          <div className="mt-6 grid gap-6 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+            {liveCodes.map((code) => (
+              <a key={code} href={`http://localhost:3000/trading/${code}`} className="group">
+                <div className="tooltip tooltip-bottom w-full" data-tip={t("enter")}>
+                  <div className="card bg-base-100 transition shadow-sm group-hover:shadow-xl">
+                    <div className="card-body p-6">
+                      <div className="flex items-center justify-between">
+                        <span className="card-title font-mono text-lg">{code}</span>
+                        <ChevronRight className="size-5 text-base-content/50 group-hover:text-primary" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="container py-16">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">{t("quickLinks")}</h2>
         </div>
-        {stockCodes.length === 0 ? (
+        {backtestCodes.length === 0 ? (
           <div className="mt-4 text-sm text-base-content/60">{t("empty")}</div>
         ) : (
-          <div className="mt-6 grid gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-            {stockCodes.map((code) => (
+          <div className="mt-6 grid gap-6 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+            {backtestCodes.map((code) => (
               <Link key={code} href={toTrading(code)} className="group">
                 <div className="tooltip tooltip-bottom w-full" data-tip={t("enter")}>
                   <div className="card bg-base-100 transition shadow-sm group-hover:shadow-xl">
@@ -87,7 +123,7 @@ export default async function ArenaHome({ locale }: Props) {
           </div>
         )}
 
-        <div data-theme="cupcake" className="mt-10">
+        <div className="mt-10">
           <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3 justify-items-center">
           <div className="card w-full max-w-sm bg-gradient-to-br from-base-100 to-base-200 border-2 border-primary ring-1 ring-primary/30 shadow-xl hover:shadow-2xl transition hover:-translate-y-0.5">
             <div className="card-body p-6">

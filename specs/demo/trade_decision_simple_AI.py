@@ -54,7 +54,19 @@ SYSTEM_PROMPT_TEXT = (
     "- Stop-Loss Authority:\n"
     "  - Any 'stop_loss' you set is advisory; you must issue SELL/CLOSE on the next trading day to execute it. The engine will not auto-trigger stop-loss.\n"
     "\n"
-    "Output strictly in JSON format with 'trade_signal_args'."
+    "*** REAL-WORLD EXECUTION PRICING (CRITICAL) ***\n"
+    "You are placing REAL orders. To ensure execution against market gaps:\n"
+    "- **BUY Orders**: Set 'limit_price' 1%~2% HIGHER than Current Price. (e.g., if Price is 100, limit_price=101.5). If you are desperate (Super Trend), use 2%.\n"
+    "- **SELL Orders**: Set 'limit_price' 1%~2% LOWER than Current Price. (e.g., if Price is 100, limit_price=98.5). If Trend Breaks, use 2% to flee.\n"
+    "- **HOLD**: limit_price = 0.\n"
+    "\n"
+    "Output strictly in JSON format with 'trade_signal_args':\n"
+    "{\n"
+    "  'symbol': '...', 'signal': '...', 'quantity': ...,\n"
+    "  'confidence': float,\n"
+    "  'limit_price': float,\n"
+    "  'stop_loss': float, 'invalidation_condition': '...'\n"
+    "}" 
 )
 
 def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
@@ -933,6 +945,24 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                 except Exception:
                     entry_price = None
 
+            limit_price = args.get('limit_price')
+            try:
+                current_p = float((market_data_dict.get(symbol) or {}).get('current_price') or 0)
+                is_price_valid = (limit_price is not None and float(limit_price) > 0)
+                if is_price_valid:
+                    if current_p > 0 and abs(float(limit_price) - current_p) / current_p > 0.10:
+                        is_price_valid = False
+                if not is_price_valid and current_p > 0:
+                    if sig == 'buy':
+                        limit_price = current_p * 1.015
+                    elif sig in ('sell', 'close'):
+                        limit_price = current_p * 0.985
+                    else:
+                        limit_price = 0.0
+                limit_price = round(float(limit_price), 2) if limit_price is not None else None
+            except Exception:
+                limit_price = None
+
             # 失效条件兜底：优先 stop_loss，其次 EMA20 连续两日下破建议
             stop_loss = args.get('stop_loss')
             invalidation_condition = args.get('invalidation_condition')
@@ -955,7 +985,7 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
 
             # 输出字段规范化与精简
             allowed_keys = {
-                'symbol', 'signal', 'quantity', 'entry_price', 'leverage', 'confidence',
+                'symbol', 'signal', 'quantity', 'entry_price', 'limit_price', 'leverage', 'confidence',
                 'invalidation_condition', 'profit_target', 'stop_loss', 'risk_usd',
                 'stop_loss_pct', 'tp_trailing_pct'
             }
@@ -979,7 +1009,8 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                 'symbol': args.get('symbol') or symbol,
                 'signal': sig,
                 'quantity': int(qty_lots),
-                'entry_price': entry_price,
+                'entry_price': limit_price if limit_price is not None else entry_price,
+                'limit_price': limit_price,
                 'leverage': float(args.get('leverage', 1.0) or 1.0),
                 'confidence': float(args.get('confidence', 0.5) or 0.5),
                 'invalidation_condition': invalidation_condition,
@@ -997,4 +1028,3 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
         decisions[symbol] = result
 
     return decisions
-

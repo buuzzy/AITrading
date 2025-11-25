@@ -1074,7 +1074,7 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         try:
             os.makedirs(out_dir, exist_ok=True)
             with open(trades_csv_path, 'w', encoding='utf-8') as fcsv:
-                fcsv.write("date,execution_date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price\n")
+                fcsv.write("date,execution_date,price,limit_price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price\n")
         except Exception:
             print(f"⚠️ 初始化交易 CSV 失败：{trades_csv_path}")
     # 组合初始化与输出头
@@ -2018,10 +2018,28 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
             exec_date = pd.to_datetime(_next, format='%Y%m%d').strftime('%Y-%m-%d') if _next else None
         except Exception:
             exec_date = None
+        limit_price_csv = None
+        try:
+            lp = args.get('limit_price')
+            limit_price_csv = float(lp) if lp is not None else None
+        except Exception:
+            limit_price_csv = None
+        if (limit_price_csv is None or (isinstance(limit_price_csv, float) and limit_price_csv <= 0)) and price and price > 0:
+            if signal == 'buy':
+                limit_price_csv = float(price) * 1.015
+            elif signal in ('sell', 'close'):
+                limit_price_csv = float(price) * 0.985
+            else:
+                limit_price_csv = 0.0
+        try:
+            limit_price_csv = round(float(limit_price_csv), 4) if limit_price_csv is not None else None
+        except Exception:
+            pass
         actions.append({
             'date': date_str,
             'execution_date': exec_date,
             'price': price,
+            'limit_price': limit_price_csv,
             'signal': signal,
             'quantity': quantity,
             'leverage': leverage,
@@ -2037,9 +2055,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         eff_price = entry_price if ok and signal in ('buy','sell','close') else price
         _upsert_trades_csv(
             trades_csv_path,
-            header="date,execution_date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price",
+            header="date,execution_date,price,limit_price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price",
             date_key=date_str,
-            line=f"{date_str},{exec_date or ''},{price:.4f},{signal},{int(quantity)},{leverage:.2f},{1 if ok else 0},{portfolio.available_cash:.2f},{portfolio.total_asset:.2f},{llm_ms},{eff_price:.4f}"
+            line=f"{date_str},{exec_date or ''},{price:.4f},{'' if limit_price_csv is None else f'{limit_price_csv:.4f}'},{signal},{int(quantity)},{leverage:.2f},{1 if ok else 0},{portfolio.available_cash:.2f},{portfolio.total_asset:.2f},{llm_ms},{eff_price:.4f}"
         )
 
         ok_u_j, err_u_j = _r2_upload(llm_json_path, key_prefix='aitrading', run_id=run_id, symbol=symbol, start_date=start_date, end_date=dstr)
