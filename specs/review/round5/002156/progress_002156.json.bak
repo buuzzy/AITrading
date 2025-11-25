@@ -1,0 +1,15 @@
+{
+  "symbol": "002156",
+  "start_date": "20250801",
+  "last_processed_date": "20251120",
+  "last_available_date": "20251120",
+  "model_name": "deepseek-reasoner",
+  "data_source": "tinyshare",
+  "updated_at": "2025-11-22 21:48:28",
+  "can_sell_after": {
+    "002156": "20251113"
+  },
+  "buy_cooldown_until": null,
+  "stop_reason": "non_trading_day",
+  "today": "20251122"
+}

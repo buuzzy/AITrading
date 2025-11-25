@@ -452,7 +452,6 @@ class SimplePortfolio:
         return sum(pos.calculate_unrealized_pnl() for pos in self.positions.values())
     
     def save_to_file(self, filename: str) -> None:
-        """Save portfolio to JSON file"""
         data = {
             'positions': [pos.to_dict() for pos in self.positions.values()],
             'timestamp': datetime.now().isoformat(),
@@ -460,25 +459,56 @@ class SimplePortfolio:
             'available_cash': self.available_cash,
             'total_asset': self.total_asset
         }
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
+        tmp = f"{filename}.tmp"
+        try:
+            import os, shutil
+            if os.path.isfile(filename):
+                try:
+                    shutil.copyfile(filename, f"{filename}.bak")
+                except Exception:
+                    pass
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp, filename)
+        except Exception:
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
     
     def load_from_file(self, filename: str) -> None:
-        """Load portfolio from JSON file"""
-        with open(filename, 'r') as f:
-            data = json.load(f)
-        
-        # Load cash information if available
+        import os
+        path = filename
+        data = None
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            try:
+                bak = f"{filename}.bak"
+                with open(bak, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                path = bak
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            data = {}
         self.initial_cash = data.get('initial_cash', self.initial_cash)
-        self.available_cash = data.get('available_cash', self.initial_cash)
-        
+        self.available_cash = data.get('available_cash', self.available_cash)
         self.positions = {}
         for pos_data in data.get('positions', []):
-            position = Position.from_dict(pos_data)
-            self.positions[position.symbol] = position
-        
-        # Recalculate available cash and total asset
-        self._recalculate_assets()
+            try:
+                position = Position.from_dict(pos_data)
+                self.positions[position.symbol] = position
+            except Exception:
+                pass
+        self._update_total_asset()
     
     def display(self) -> None:
         """Simple display of all positions"""

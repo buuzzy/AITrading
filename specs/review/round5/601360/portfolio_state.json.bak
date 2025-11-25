@@ -1,0 +1,18 @@
+{
+  "positions": [
+    {
+      "symbol": "601360",
+      "quantity": 4400.0,
+      "entry_price": 10.380519402985074,
+      "current_price": 11.01,
+      "liquidation_price": null,
+      "leverage": 1.0,
+      "unrealized_pnl": 2769.7146268656725,
+      "entry_time": "2025-11-23T22:22:38.682533"
+    }
+  ],
+  "timestamp": "2025-11-23T22:25:21.530114",
+  "initial_cash": 100000.0,
+  "available_cash": 49436.11806663,
+  "total_asset": 97880.11806663
+}

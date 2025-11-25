@@ -1,0 +1,13 @@
+{
+  "symbol": "601360",
+  "start_date": "20250101",
+  "last_processed_date": "20250807",
+  "last_available_date": "20251120",
+  "model_name": "deepseek-reasoner",
+  "data_source": "tinyshare",
+  "updated_at": "2025-11-23 22:28:47",
+  "can_sell_after": {
+    "601360": "20250728"
+  },
+  "buy_cooldown_until": "20250806"
+}

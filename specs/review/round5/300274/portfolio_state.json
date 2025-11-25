@@ -1,0 +1,18 @@
+{
+  "positions": [
+    {
+      "symbol": "300274",
+      "quantity": 100.0,
+      "entry_price": 184.3654,
+      "current_price": 177.36,
+      "liquidation_price": null,
+      "leverage": 1.0,
+      "unrealized_pnl": -700.539999999998,
+      "entry_time": "2025-11-22T05:35:32.236257"
+    }
+  ],
+  "timestamp": "2025-11-22T05:45:37.504142",
+  "initial_cash": 100000.0,
+  "available_cash": 106884.02221980003,
+  "total_asset": 124620.02221980003
+}

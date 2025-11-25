@@ -16,19 +16,41 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Supabase env missing.' }, { status: 500 });
   }
   try {
-    const endpoint = `${url}/rest/v1/trades?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
-    const resp = await fetch(endpoint, {
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        Accept: 'application/json',
-      },
-      cache: 'no-store',
-    });
+    const tradesEndpoint = `${url}/rest/v1/trades?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
+    const metricsEndpoint = `${url}/rest/v1/daily_metrics?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
+    const [resp, mresp] = await Promise.all([
+      fetch(tradesEndpoint, {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
+      }),
+      fetch(metricsEndpoint, {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
+      }),
+    ]);
     if (!resp.ok) {
       return NextResponse.json({ error: `Supabase trades read failed: ${resp.status}` }, { status: 502 });
     }
+    if (!mresp.ok) {
+      return NextResponse.json({ error: `Supabase metrics read failed: ${mresp.status}` }, { status: 502 });
+    }
     const rows: any[] = await resp.json();
+    const mrows: any[] = await mresp.json();
+    const mByDate: Record<string, any> = {};
+    for (const r of mrows) {
+      try {
+        const d = new Date(r.date).toISOString().slice(0, 10);
+        mByDate[d] = r;
+      } catch {}
+    }
     let modelName = '';
     try {
       const p = path.join(process.cwd(), 'specs', 'backtest', String(stock_code), `progress_${String(stock_code)}.json`);
@@ -116,6 +138,31 @@ export async function GET(request: Request) {
       const rawTA = (llm?.market_prompt ?? '') as string;
       const reasoning = normalizeText(stripHtml(rawReasoning));
       const technical_analysis = extractTA(rawTA);
+      let position_total: number | null = null;
+      let profit: number | null = null;
+      try {
+        const dkey = new Date(r.date).toISOString().slice(0, 10);
+        const cur = mByDate[dkey];
+        if (cur) {
+          if (cur.position !== undefined && cur.position !== null) {
+            position_total = Number(cur.position);
+          }
+          if (cur.daily_return !== undefined && cur.daily_return !== null) {
+            profit = Number(cur.daily_return);
+          } else if (cur.equity !== undefined && cur.equity !== null) {
+            const prevDate = Object.keys(mByDate)
+              .filter(k => k < dkey)
+              .sort()
+              .pop();
+            if (prevDate) {
+              const prev = mByDate[prevDate];
+              if (prev && prev.equity !== undefined && prev.equity !== null) {
+                profit = Number(cur.equity) - Number(prev.equity);
+              }
+            }
+          }
+        }
+      } catch {}
       return {
         date: r.date,
         model: modelName,
@@ -127,6 +174,8 @@ export async function GET(request: Request) {
         stop_loss: '',
         reasoning,
         technical_analysis,
+        position_total,
+        profit,
       };
     });
     return NextResponse.json({ data }, { headers: { 'Cache-Control': 'no-store' } });

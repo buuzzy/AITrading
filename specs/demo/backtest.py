@@ -11,13 +11,14 @@
 - 决策引擎：DeepSeek（OpenAI SDK，base_url 指向 deepseek），连续失败3次后暂停并等待用户确认继续或退出
 """
 import os
+import shutil
 import tinyshare as ts
 import sys
 import json
 import math
 import argparse
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import time
 import uuid
 import requests
@@ -48,6 +49,285 @@ except Exception:
         def request_technical_analysis_dify(symbol: str, ts_code: str, today: str, prev_open: str):
             return None
 
+def _build_dify_kline_inputs(df: pd.DataFrame, idx: int):
+    hist = df.iloc[:idx]
+    d_start = max(0, idx - 80)
+    d_slice = df.iloc[d_start:idx]
+    daily = []
+    for _, r in d_slice.iterrows():
+        daily.append({
+            "date": r['date'].strftime('%Y%m%d') if not pd.isna(r['date']) else None,
+            "open": None if pd.isna(r.get('open', None)) else float(r.get('open', None)),
+            "high": None if pd.isna(r.get('high', None)) else float(r.get('high', None)),
+            "low": None if pd.isna(r.get('low', None)) else float(r.get('low', None)),
+            "close": None if pd.isna(r.get('close', None)) else float(r.get('close', None))
+        })
+    w = hist.copy()
+    w['week'] = w['date'].dt.to_period('W-FRI')
+    w_agg = w.groupby('week').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'date': 'last'
+    }).reset_index(drop=True)
+    w_slice = w_agg.iloc[max(0, len(w_agg) - 40):]
+    weekly = []
+    for _, r in w_slice.iterrows():
+        dval = r['date']
+        weekly.append({
+            "date": dval.strftime('%Y%m%d') if not pd.isna(dval) else None,
+            "open": None if pd.isna(r.get('open', None)) else float(r.get('open', None)),
+            "high": None if pd.isna(r.get('high', None)) else float(r.get('high', None)),
+            "low": None if pd.isna(r.get('low', None)) else float(r.get('low', None)),
+            "close": None if pd.isna(r.get('close', None)) else float(r.get('close', None))
+        })
+    return daily, weekly
+
+def _fetch_daily_weekly_from_api(pro, ts_code: str, prev_open: str, daily_len: int = 80, weekly_len: int = 40):
+    d_end = prev_open
+    try:
+        d_start = (pd.to_datetime(prev_open) - pd.Timedelta(days=365)).strftime('%Y%m%d')
+    except Exception:
+        d_start = prev_open
+    daily_df = None
+    weekly_df = None
+    try:
+        daily_df = pro.fund_daily(ts_code=ts_code, start_date=d_start, end_date=d_end)
+    except Exception:
+        daily_df = None
+    try:
+        weekly_df = pro.weekly(ts_code=ts_code, start_date=d_start, end_date=d_end)
+    except Exception:
+        weekly_df = None
+    if daily_df is None or daily_df.empty:
+        try:
+            daily_df = pro.daily(ts_code=ts_code, start_date=d_start, end_date=d_end)
+        except Exception:
+            daily_df = None
+    daily = []
+    try:
+        if daily_df is not None and not daily_df.empty:
+            daily_df = daily_df.rename(columns={'trade_date': 'date'})
+            daily_df['date'] = pd.to_datetime(daily_df['date'].astype(str))
+            daily_df = daily_df.sort_values('date')
+            daily_df = daily_df[daily_df['date'] <= pd.to_datetime(prev_open)]
+            daily_df = daily_df.tail(daily_len)
+            for _, r in daily_df.iterrows():
+                daily.append({
+                    'date': r['date'].strftime('%Y%m%d'),
+                    'open': float(r['open']),
+                    'high': float(r['high']),
+                    'low': float(r['low']),
+                    'close': float(r['close'])
+                })
+    except Exception:
+        daily = []
+    weekly = []
+    try:
+        if weekly_df is not None and not weekly_df.empty:
+            weekly_df = weekly_df.rename(columns={'trade_date': 'date'})
+            weekly_df['date'] = pd.to_datetime(weekly_df['date'].astype(str))
+            weekly_df = weekly_df.sort_values('date')
+            weekly_df = weekly_df[weekly_df['date'] <= pd.to_datetime(prev_open)]
+            weekly_df = weekly_df.tail(weekly_len)
+            for _, r in weekly_df.iterrows():
+                weekly.append({
+                    'date': r['date'].strftime('%Y%m%d'),
+                    'open': float(r['open']),
+                    'high': float(r['high']),
+                    'low': float(r['low']),
+                    'close': float(r['close'])
+                })
+        elif daily_df is not None and not daily_df.empty:
+            tmp = daily_df.rename(columns={'trade_date': 'date'}).copy()
+            tmp['date'] = pd.to_datetime(tmp['date'].astype(str))
+            tmp = tmp[tmp['date'] <= pd.to_datetime(prev_open)]
+            tmp['week'] = tmp['date'].dt.to_period('W-FRI')
+            w_agg = tmp.groupby('week').agg({'open':'first','high':'max','low':'min','close':'last','date':'last'}).reset_index(drop=True)
+            w_agg = w_agg.tail(weekly_len)
+            for _, r in w_agg.iterrows():
+                weekly.append({
+                    'date': r['date'].strftime('%Y%m%d'),
+                    'open': float(r['open']),
+                    'high': float(r['high']),
+                    'low': float(r['low']),
+                    'close': float(r['close'])
+                })
+    except Exception:
+        weekly = []
+    return daily, weekly
+
+def _request_technical_analysis_dify_v2(stock_code: str, daily: list, weekly: list, print_full: bool = False, excerpt_len: int = 120):
+    api_key = os.getenv('DIFY_API_KEY')
+    url = os.getenv('DIFY_API_URL') or 'https://api.dify.ai/v1/workflows/run'
+    if not api_key:
+        return None
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json'
+    }
+    payload = {
+        'inputs': {
+            'stock_code': stock_code,
+            'daily': json.dumps(daily, ensure_ascii=False),
+            'weekly': json.dumps(weekly, ensure_ascii=False)
+        },
+        'response_mode': 'blocking',
+        'user': 'backtest'
+    }
+    try:
+        t0 = time.time()
+        print(f"[DIFY] POST {url} | stock_code={stock_code} | daily_count={len(daily)} | weekly_count={len(weekly)}")
+        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=180)
+        t1 = time.time()
+        ms = int((t1 - t0) * 1000)
+        print(f"[DIFY] Response status={r.status_code} | elapsed={ms}ms")
+        if r.status_code == 200:
+            try:
+                obj = r.json()
+                data = obj.get('data') or {}
+                status = data.get('status')
+                wf_id = data.get('workflow_id')
+                run_id = data.get('id')
+                print(f"[DIFY] workflow_id={wf_id} run_id={run_id} status={status}")
+                outputs = data.get('outputs') or {}
+                text = None
+                if isinstance(outputs, dict):
+                    keys = list(outputs.keys())
+                    print(f"[DIFY] outputs keys={keys}")
+                    preferred_keys = ['technical_analysis', 'text', 'result']
+                    for k in preferred_keys:
+                        if k in outputs and isinstance(outputs.get(k), str) and outputs.get(k).strip():
+                            text = outputs.get(k)
+                            break
+                    if not text:
+                        for v in outputs.values():
+                            if isinstance(v, str) and v.strip():
+                                text = v
+                                break
+                elif isinstance(outputs, str):
+                    text = outputs
+                if text:
+                    if print_full:
+                        print(f"[DIFY] TA full len={len(text)}\n{text}")
+                    else:
+                        frag = (text[:excerpt_len] or '').replace('\n', ' ').replace('"', '\"')
+                        print(f"[DIFY] TA excerpt=\"{frag}\" len={len(text)}")
+                else:
+                    print("[DIFY] outputs did not contain textual TA")
+                return text
+            except Exception as e:
+                print(f"[DIFY] Parse error: {e}")
+                return None
+        else:
+            try:
+                err_txt = r.text[:200]
+                print(f"[DIFY] Non-200 response body: {err_txt}")
+            except Exception:
+                pass
+            return None
+    except Exception as e:
+        print(f"[DIFY] Request exception: {e}")
+        return None
+
+def _request_technical_analysis_dify_streaming(stock_code: str, daily: list, weekly: list, print_full: bool = False, excerpt_len: int = 120):
+    api_key = os.getenv('DIFY_API_KEY')
+    url = os.getenv('DIFY_API_URL') or 'https://api.dify.ai/v1/workflows/run'
+    if not api_key:
+        return None
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json'
+    }
+    try:
+        timeout_s = int(os.getenv('DIFY_TIMEOUT') or '180')
+    except Exception:
+        timeout_s = 180
+    payload = {
+        'inputs': {
+            'stock_code': stock_code,
+            'daily': json.dumps(daily, ensure_ascii=False),
+            'weekly': json.dumps(weekly, ensure_ascii=False)
+        },
+        'response_mode': 'streaming',
+        'user': 'backtest'
+    }
+    try:
+        t0 = time.time()
+        print(f"[DIFY] POST {url} | stock_code={stock_code} | daily_count={len(daily)} | weekly_count={len(weekly)}")
+        resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=timeout_s)
+        t1 = time.time()
+        ms = int((t1 - t0) * 1000)
+        print(f"[DIFY] Response status={resp.status_code} | elapsed={ms}ms")
+        if resp.status_code != 200:
+            try:
+                err_txt = resp.text[:200]
+                print(f"[DIFY] Non-200 response body: {err_txt}")
+            except Exception:
+                pass
+            return None
+        text_chunks: List[str] = []
+        outputs: Dict[str, Any] = {}
+        workflow_run_id = None
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            if isinstance(line, bytes):
+                try:
+                    line = line.decode('utf-8', errors='ignore')
+                except Exception:
+                    continue
+            if not str(line).startswith('data: '):
+                continue
+            payload_str = str(line)[6:].strip()
+            try:
+                evt = json.loads(payload_str)
+            except Exception:
+                continue
+            event = evt.get('event')
+            data_obj = evt.get('data') or {}
+            workflow_run_id = evt.get('workflow_run_id') or workflow_run_id
+            if event == 'text_chunk':
+                txt = (data_obj or {}).get('text')
+                if isinstance(txt, str) and txt:
+                    text_chunks.append(txt)
+            if event == 'node_finished':
+                outs = data_obj.get('outputs') or {}
+                if isinstance(outs, dict) and outs:
+                    outputs = outs
+        text = None
+        if outputs:
+            if isinstance(outputs, dict):
+                preferred_keys = ['technical_analysis', 'text', 'result']
+                for k in preferred_keys:
+                    v = outputs.get(k)
+                    if isinstance(v, str) and v.strip():
+                        text = v
+                        break
+                if not text:
+                    for v in outputs.values():
+                        if isinstance(v, str) and v.strip():
+                            text = v
+                            break
+            elif isinstance(outputs, str):
+                text = outputs
+        else:
+            if text_chunks:
+                text = ''.join(text_chunks)
+        if text:
+            if print_full:
+                print(f"[DIFY] TA full len={len(text)}\n{text}")
+            else:
+                frag = (text[:excerpt_len] or '').replace('\n', ' ').replace('"', '\"')
+                print(f"[DIFY] TA excerpt=\"{frag}\" len={len(text)}")
+        else:
+            print("[DIFY] outputs did not contain textual TA")
+        return text
+    except Exception as e:
+        print(f"[DIFY] Request exception: {e}")
+        return None
+
 # 辅助：读写 JSON（进度与 LLM 输出），以及 CSV 按日期唯一覆盖
 def _load_json(path: str) -> Dict[str, Any]:
     try:
@@ -59,12 +339,29 @@ def _load_json(path: str) -> Dict[str, Any]:
     return {}
 
 def _save_json(path: str, obj: Dict[str, Any]) -> None:
+    tmp = f"{path}.tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
+        if os.path.isfile(path):
+            try:
+                shutil.copyfile(path, f"{path}.bak")
+            except Exception:
+                pass
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
-    except Exception:
-        print(f"⚠️ 写入 JSON 失败：{path}")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass
+        os.replace(tmp, path)
+    except Exception as e:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        print(f"⚠️ 写入 JSON 失败：{path} | {e}")
 
 def _upsert_trades_csv(path: str, header: str, date_key: str, line: str) -> None:
     # 读取已存在内容；删除同日期旧行；写回（保留表头）
@@ -125,6 +422,11 @@ def normalize_symbol(sym: str):
         exch = 'SH'
     elif base.startswith(('000', '001', '002', '003', '300')):
         exch = 'SZ'
+    # ETF 常见前缀（保守覆盖）：上交所 510/512/513/515/518；深交所 159/150
+    elif base.startswith(('510', '512', '513', '515', '518')):
+        exch = 'SH'
+    elif base.startswith(('159', '150')):
+        exch = 'SZ'
     else:
         exch = 'SH' if base[0] == '6' else 'SZ'
     return base, exch
@@ -168,17 +470,26 @@ def _supabase_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: str = 
     params = {}
     if on_conflict:
         params['on_conflict'] = on_conflict
-    try:
-        r = requests.post(endpoint, headers=_supabase_headers(key, True), params=params, data=json.dumps(rows), timeout=30)
-        if 200 <= r.status_code < 300:
-            return True, None
+    attempts = 0
+    last_err = None
+    while attempts < 3:
+        attempts += 1
         try:
-            err = r.json()
-        except Exception:
-            err = r.text
-        return False, err
-    except Exception as e:
-        return False, str(e)
+            r = requests.post(endpoint, headers=_supabase_headers(key, True), params=params, data=json.dumps(rows), timeout=30)
+            if 200 <= r.status_code < 300:
+                return True, None
+            try:
+                last_err = r.json()
+            except Exception:
+                last_err = r.text
+        except Exception as e:
+            last_err = str(e)
+        if attempts < 3:
+            try:
+                time.sleep(min(2 ** attempts, 5))
+            except Exception:
+                pass
+    return False, last_err
 
 def _ensure_run(symbol: str, start_date: str, end_date: str, label: str = None) -> str:
     url, key = _supabase_creds()
@@ -275,6 +586,32 @@ def _supabase_upsert_ohlc(run_id: str, symbol: str, date_str: str, open_p: float
         'source': source,
     }
     return _supabase_upsert('ohlc', [doc], on_conflict='symbol,date')
+
+def _supabase_upsert_cashflow(run_id: str, symbol: str, date_str: str, amount: float):
+    base_sym, _ = normalize_symbol(symbol)
+    doc = {
+        'run_id': run_id,
+        'symbol': base_sym,
+        'date': pd.to_datetime(date_str, format=('%Y-%m-%d' if '-' in date_str else '%Y%m%d')).strftime('%Y-%m-%d'),
+        'amount': float(amount) if amount is not None else None,
+    }
+    return _supabase_upsert('cashflows', [doc], on_conflict='run_id,symbol,date')
+
+def _supabase_upsert_manual_exec(run_id: str, symbol: str, decision_date: str, execution_date: str, side: str, quantity_shares: float, price: float, success: bool):
+    base_sym, _ = normalize_symbol(symbol)
+    sd = pd.to_datetime(decision_date, format=('%Y-%m-%d' if '-' in decision_date else '%Y%m%d')).strftime('%Y-%m-%d') if decision_date else None
+    ed = pd.to_datetime(execution_date, format=('%Y-%m-%d' if '-' in execution_date else '%Y%m%d')).strftime('%Y-%m-%d') if execution_date else None
+    doc = {
+        'run_id': run_id,
+        'symbol': base_sym,
+        'decision_date': sd,
+        'execution_date': ed,
+        'side': str(side or '').lower(),
+        'quantity_shares': float(quantity_shares) if quantity_shares is not None else None,
+        'price': float(price) if price is not None else None,
+        'success': bool(success),
+    }
+    return _supabase_upsert('manual_exec', [doc])
 
 # === Cloudflare R2 上传辅助（S3 兼容） ===
 def _r2_client():
@@ -383,6 +720,45 @@ def compute_macd_full(series: pd.Series, fast: int = 12, slow: int = 26, signal:
         return none_series, none_series, none_series
 
 
+def compute_bollinger(series: pd.Series, period: int = 20, k: float = 2.0):
+    try:
+        ma = series.rolling(window=period, min_periods=1).mean()
+        std = series.rolling(window=period, min_periods=1).std()
+        upper = ma + k * std
+        lower = ma - k * std
+        return ma, upper, lower
+    except Exception:
+        n = len(series)
+        none_series = pd.Series([None] * n)
+        return none_series, none_series, none_series
+
+def compute_kdj(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 9):
+    try:
+        ll = low.rolling(window=n, min_periods=1).min()
+        hh = high.rolling(window=n, min_periods=1).max()
+        denom = (hh - ll).replace(0, np.nan)
+        rsv = ((close - ll) / denom) * 100.0
+        k = rsv.ewm(alpha=1/3, adjust=False).mean()
+        d = k.ewm(alpha=1/3, adjust=False).mean()
+        j = 3.0 * k - 2.0 * d
+        return k, d, j
+    except Exception:
+        nlen = len(close)
+        none_series = pd.Series([None] * nlen)
+        return none_series, none_series, none_series
+
+def compute_cci(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 20):
+    try:
+        tp = (high + low + close) / 3.0
+        ma = tp.rolling(window=n, min_periods=1).mean()
+        md = (tp - ma).abs().rolling(window=n, min_periods=1).mean()
+        denom = (0.015 * md).replace(0, np.nan)
+        cci = (tp - ma) / denom
+        return cci
+    except Exception:
+        return pd.Series([None] * len(close))
+
+
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     """Wilder RSI（滚动均值版）。
 
@@ -486,7 +862,10 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                  transfer_fee_rate: float = 0.00001,
                  model_name: str = "deepseek-chat",
                  llm_ndjson: bool = False,
-                 strict_deps: bool = False) -> Dict[str, Any]:
+                 strict_deps: bool = False,
+                 ta_print_full: bool = False,
+                 ta_excerpt_len: int = 120,
+                 output_root: str = "specs/backtest") -> Dict[str, Any]:
     logger = logging.getLogger("backtest")
     # 默认采用“关键里程碑”日志风格：不打印完整 prompts/reasoning，仅输出关键节点
     # 保留 hide_prompts/hide_reasoning 兼容，但默认代码路径不再打印这些长文本
@@ -504,19 +883,25 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         logger.error("缺少 TINYSHARE_TOKEN，无法拉取在线因子数据。请在 .env 配置后重试。")
         return {}
     df = pd.DataFrame()
+    is_etf = False
     try:
         ts.set_token(token)
         pro = ts.pro_api()
         # 已在上方规范化 ts_code
         # 在线拉取：为保证有“开始日前30个交易日”上下文，扩展开始日期向前约90天
         start_dt_safe = pd.to_datetime(start_date, errors='coerce')
+        if pd.isna(start_dt_safe):
+            logger.error("开始日期格式无效：%s", start_date)
+            return {}
         end_dt_safe = pd.to_datetime(end_date, errors='coerce')
+        if pd.isna(end_dt_safe):
+            end_dt_safe = pd.Timestamp.now()
         prefetch_start_dt = start_dt_safe - pd.Timedelta(days=90)
         prefetch_start_str = prefetch_start_dt.strftime('%Y%m%d')
         end_str = end_dt_safe.strftime('%Y%m%d')
-        # 直接使用 stk_factor，避免本地再计算 MACD/RSI
         df = pro.stk_factor(ts_code=ts_code, start_date=prefetch_start_str, end_date=end_str)
-        if not df.empty:
+        is_etf = False
+        if df is not None and not df.empty:
             df = df.rename(columns={'trade_date': 'date'})
             date_str = df['date'].astype(str).str.replace('-', '', regex=False).str.strip()
             df['date'] = pd.to_datetime(date_str, format='%Y%m%d', errors='coerce')
@@ -542,20 +927,62 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                     logger.error("在线因子数据过滤后为空，请调整日期范围")
                     return {}
         else:
-            logger.error("stk_factor 返回为空，请检查 ts_code/日期范围。")
-            return {}
+            try:
+                df_fund = pro.fund_daily(ts_code=ts_code, start_date=prefetch_start_str, end_date=end_str)
+            except Exception:
+                df_fund = pd.DataFrame()
+            if df_fund is not None and not df_fund.empty:
+                is_etf = True
+                df = df_fund.rename(columns={'trade_date': 'date', 'pct_chg': 'pct_change'})
+                df['date'] = pd.to_datetime(df['date'].astype(str))
+                df = df.sort_values('date').reset_index(drop=True)
+                start_dt = pd.to_datetime(start_date)
+                end_dt = pd.to_datetime(end_date)
+                df = df[df['date'] <= end_dt].copy()
+                df_main = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)].copy()
+                df_pre = df[df['date'] < start_dt].tail(30).copy()
+                df = pd.concat([df_pre, df_main], ignore_index=True)
+                df = df.sort_values('date').drop_duplicates(subset=['date']).reset_index(drop=True)
+                closes = pd.to_numeric(df['close'], errors='coerce')
+                dif, dea, hist = compute_macd_full(closes)
+                rsi6 = compute_rsi(closes, 6)
+                rsi12 = compute_rsi(closes, 12)
+                rsi24 = compute_rsi(closes, 24)
+                ma20, boll_upper, boll_lower = compute_bollinger(closes, 20, 2.0)
+                k, d, j = compute_kdj(pd.to_numeric(df['high'], errors='coerce'), pd.to_numeric(df['low'], errors='coerce'), closes, 9)
+                cci = compute_cci(pd.to_numeric(df['high'], errors='coerce'), pd.to_numeric(df['low'], errors='coerce'), closes, 20)
+                df['macd_dif'] = dif
+                df['macd_dea'] = dea
+                df['macd'] = hist
+                df['rsi_6'] = rsi6
+                df['rsi_12'] = rsi12
+                df['rsi_24'] = rsi24
+                df['boll_mid'] = ma20
+                df['boll_upper'] = boll_upper
+                df['boll_lower'] = boll_lower
+                df['kdj_k'] = k
+                df['kdj_d'] = d
+                df['kdj_j'] = j
+                df['cci'] = cci
+            else:
+                logger.error("数据源为空：既无 stk_factor 也无 fund_daily。")
+                return {}
     except Exception as e:
         logger.error(f"stk_factor 拉取失败：{e}")
         return {}
 
+    if is_etf:
+        try:
+            stamp_duty_rate = 0.0
+        except Exception:
+            pass
     # 标准化并按交易日排序
     if 'trade_date' in df.columns and 'date' not in df.columns:
         df['date'] = pd.to_datetime(df['trade_date'].astype(str))
     df = df.sort_values('date').reset_index(drop=True)
 
-    # 收盘价转为数值类型，避免字符串或非数值导致计算异常（以 stk_factor 的 close 字段为准）
     if 'close' not in df.columns:
-        logger.error("数据集中缺少 close 列（stk_factor），无法运行回测。")
+        logger.error("数据集中缺少 close 列，无法运行回测。")
         return {}
     df['close'] = pd.to_numeric(df['close'], errors='coerce')
     if df['close'].isna().all():
@@ -598,14 +1025,38 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
     df['date_str'] = df['date'].dt.strftime('%Y%m%d')
     idx_map = {row['date_str']: i for i, row in df.iterrows()}
     # 调试：打印交易日与数据日期范围，定位不匹配问题
+    # 计算区间末尾之后的下一个开市日（用于最后一个有数据交易日的执行日期）
+    next_open_after_end = None
+    try:
+        end_dt_plus = (pd.to_datetime(end_date) + pd.Timedelta(days=14)).strftime('%Y%m%d')
+        cal_ext = pro.trade_cal(exchange=exch_api, start_date=end_str, end_date=end_dt_plus)
+        if cal_ext is not None and not cal_ext.empty:
+            cal_ext['cal_date'] = cal_ext['cal_date'].astype(str).str.replace('-', '', regex=False).str.strip()
+            cal_ext['is_open'] = pd.to_numeric(cal_ext['is_open'], errors='coerce').fillna(0).astype(int)
+            opens_ext = [d for d in cal_ext.loc[cal_ext['is_open'] == 1, 'cal_date'].tolist() if d > end_str]
+            if opens_ext:
+                next_open_after_end = opens_ext[0]
+    except Exception:
+        next_open_after_end = None
+
     if open_days:
         print(f"交易日数量: {len(open_days)} | 首日: {open_days[0]} | 末日: {open_days[-1]}")
     if not df.empty:
         df_dates = df['date_str'].tolist()
         print(f"数据日期范围: {df_dates[0]} ~ {df_dates[-1]} | 记录数: {len(df_dates)}")
 
+    def _next_open_day_for(dstr: str) -> Optional[str]:
+        try:
+            if open_days:
+                idx = open_days.index(dstr) if dstr in open_days else -1
+                if idx >= 0 and idx + 1 < len(open_days):
+                    return open_days[idx + 1]
+        except Exception:
+            pass
+        return next_open_after_end
+
     # 统一输出目录到 specs/backtest/<symbol>/
-    out_dir = os.path.join("specs", "backtest", symbol)
+    out_dir = os.path.join(output_root, symbol)
     try:
         os.makedirs(out_dir, exist_ok=True)
     except Exception:
@@ -623,7 +1074,7 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         try:
             os.makedirs(out_dir, exist_ok=True)
             with open(trades_csv_path, 'w', encoding='utf-8') as fcsv:
-                fcsv.write("date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price\n")
+                fcsv.write("date,execution_date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price\n")
         except Exception:
             print(f"⚠️ 初始化交易 CSV 失败：{trades_csv_path}")
     # 组合初始化与输出头
@@ -631,11 +1082,31 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
     try:
         if os.path.isfile(portfolio_state_path):
             portfolio.load_from_file(portfolio_state_path)
+        else:
+            bak = f"{portfolio_state_path}.bak"
+            if os.path.isfile(bak):
+                portfolio.load_from_file(bak)
     except Exception:
-        pass
+        try:
+            bak = f"{portfolio_state_path}.bak"
+            if os.path.isfile(bak):
+                portfolio.load_from_file(bak)
+        except Exception:
+            pass
     print(f"模型: {model_name}")
     print(f"标的: {symbol} | 时间范围: {start_date} ~ {end_date}")
     print(f"初始资金: {portfolio.initial_cash:.2f}")
+    try:
+        # 加载后立即以当前价格刷新持仓估值，避免 total_asset 与 available_cash 脱节
+        if symbol and hasattr(portfolio, 'positions'):
+            # 若有持仓则以当前首日价格更新，若空仓则 total_asset=available_cash
+            if symbol in portfolio.positions:
+                portfolio.update_price(symbol, float(df.iloc[idx_map[open_days[0]]]['close']))
+            else:
+                portfolio._update_total_asset()
+    except Exception:
+        pass
+    print(f"加载状态: 可用现金={portfolio.available_cash:.2f} 总资产={portfolio.total_asset:.2f}")
     print("开始回测（仅在交易日执行一次，价格=当日收盘价）")
     print("日期        收盘价     决策    数量         可用现金       总资产      LLM耗时(ms)")
 
@@ -662,6 +1133,46 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
     start_str_effective = start_date.replace('-', '')
     # 仅处理 >= start 且 > last_processed 的日期（确保幂等覆盖）
     process_days = [d for d in open_days if d >= start_str_effective and (not last_processed or d > last_processed)]
+
+    cashflows_by_date: Dict[str, List[float]] = {}
+    try:
+        cashflows_path = os.path.join('specs', 'Live', 'cashflows.csv')
+        if os.path.isfile(cashflows_path):
+            df_cf0 = pd.read_csv(cashflows_path)
+            df_cf0.columns = [c.strip().lower() for c in df_cf0.columns]
+            if {'symbol','date','amount'}.issubset(set(df_cf0.columns)):
+                df_cf0['symbol'] = df_cf0['symbol'].astype(str)
+                df_cf0['date'] = df_cf0['date'].astype(str)
+                df_cf0 = df_cf0[df_cf0['symbol'].apply(lambda s: normalize_symbol(s)[0]) == symbol]
+                for _, rr in df_cf0.iterrows():
+                    dt = str(rr['date']).replace('-', '')
+                    try:
+                        a = float(rr['amount'])
+                    except Exception:
+                        a = 0.0
+                    if dt:
+                        cashflows_by_date.setdefault(dt, []).append(a)
+    except Exception:
+        cashflows_by_date = {}
+
+    manual_exec_by_date: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        man_path0 = os.path.join('specs', 'Live', 'manual_exec.csv')
+        if os.path.isfile(man_path0):
+            df_me0 = pd.read_csv(man_path0)
+            df_me0.columns = [c.strip().lower() for c in df_me0.columns]
+            sym_col0 = 'symbol' if 'symbol' in df_me0.columns else ('ts_code' if 'ts_code' in df_me0.columns else None)
+            if sym_col0:
+                df_me0[sym_col0] = df_me0[sym_col0].astype(str)
+                df_me0 = df_me0[df_me0[sym_col0].apply(lambda s: normalize_symbol(s)[0]) == symbol]
+                exe_col0 = 'execution_date' if 'execution_date' in df_me0.columns else ('date_t' if 'date_t' in df_me0.columns else None)
+                if exe_col0:
+                    for _, rr in df_me0.iterrows():
+                        dt = str(rr.get(exe_col0) or '').replace('-', '')
+                        if dt:
+                            manual_exec_by_date.setdefault(dt, []).append({k: rr.get(k) for k in df_me0.columns})
+    except Exception:
+        manual_exec_by_date = {}
 
     first_day_debug_done = False
     # 最小冷却状态机：探索买入或卖出/平仓后，3个开放日内禁止买入
@@ -692,17 +1203,52 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         start_idx = max(0, i - 30)  # 修正：最多31天窗口，保证 prev30 恰为30条
         window_closes = df['close'].iloc[start_idx:i+1]
 
+        # 应用现金流
+        try:
+            amt_list = cashflows_by_date.get(dstr, [])
+            amt_total = float(sum(amt_list)) if amt_list else 0.0
+            if abs(amt_total) > 0:
+                applied = amt_total
+                try:
+                    if applied < 0:
+                        max_withdrawable = float(getattr(portfolio, 'available_cash', 0.0))
+                        if abs(applied) > max_withdrawable:
+                            applied = -max_withdrawable
+                except Exception:
+                    pass
+                portfolio.available_cash += applied
+                try:
+                    portfolio.initial_cash = float(getattr(portfolio, 'initial_cash', 0.0)) + float(applied)
+                except Exception:
+                    pass
+                portfolio._update_total_asset()
+                print(f"现金流入账 | {symbol} {date_str} 变更={applied:.2f} 可用现金={portfolio.available_cash:.2f} 初始资金={portfolio.initial_cash:.2f}")
+                try:
+                    _ = _supabase_upsert_cashflow(run_id, symbol, dstr, applied)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         portfolio.update_price(symbol, price)
 
         # 用 30 日窗口构造市场数据
         md_one = build_market_data_for_day(symbol, window_closes, len(window_closes) - 1)
+        try:
+            if 'pct_change' in df.columns and not pd.isna(df.iloc[i]['pct_change']):
+                md_one['today_change_pct'] = float(df.iloc[i]['pct_change']) / 100.0
+            else:
+                md_one['today_change_pct'] = 0.0
+        except Exception:
+            md_one['today_change_pct'] = 0.0
         # 传递 stk_factor 指标列（当前值与近窗序列）：MACD/RSI/KDJ/BOLL/CCI
         factor_cols = [
             'macd', 'macd_dif', 'macd_dea',
             'rsi_6', 'rsi_12', 'rsi_24',
             'kdj_k', 'kdj_d', 'kdj_j',
             'boll_upper', 'boll_mid', 'boll_lower',
-            'cci'
+            'cci',
+            'vol', 'amount', 'pct_change'
         ]
         for col in factor_cols:
             if col in df.columns:
@@ -716,7 +1262,24 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                     md_one[f'factor_series_{col}'] = [None if (x is None or (isinstance(x, float) and math.isnan(x))) else float(x) for x in series_window]
                 except Exception:
                     md_one[f'factor_series_{col}'] = []
-        # 注入冷却状态（供 LLM 与本地门槛统一使用）
+        if buy_cooldown_until and dstr < buy_cooldown_until:
+            try:
+                curr_rsi6 = md_one.get('factor_rsi_6')
+                curr_p = md_one.get('current_price')
+                curr_ema = md_one.get('current_close_20_ema')
+                reset_cooldown = False
+                if curr_rsi6 is not None and float(curr_rsi6) < 40.0:
+                    reset_cooldown = True
+                elif (curr_p is not None) and (curr_ema is not None):
+                    p = float(curr_p)
+                    e = float(curr_ema)
+                    if (p >= e) and (p <= e * 1.015):
+                        reset_cooldown = True
+                if reset_cooldown:
+                    buy_cooldown_until = None
+                    md_one['buy_cooldown'] = False
+            except Exception:
+                pass
         in_cooldown = False
         try:
             if buy_cooldown_until and dstr < buy_cooldown_until:
@@ -724,6 +1287,71 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         except Exception:
             in_cooldown = False
         md_one['buy_cooldown'] = bool(in_cooldown)
+
+        # 应用人工成交
+        try:
+            rows_today = manual_exec_by_date.get(dstr, [])
+            if rows_today:
+                for rr in rows_today:
+                    side_col = 'side' if 'side' in rr else ('signal' if 'signal' in rr else None)
+                    qty_col = 'quantity_shares' if 'quantity_shares' in rr else ('qty' if 'qty' in rr else None)
+                    price_col = 'price' if 'price' in rr else ('effective_price' if 'effective_price' in rr else None)
+                    succ_col = 'success' if 'success' in rr else None
+                    if not side_col or not qty_col:
+                        continue
+                    sig = str(rr.get(side_col) or '').lower().strip()
+                    if sig in ('long','buy_open','open_long'): sig = 'buy'
+                    elif sig in ('short','sell_open','open_short'): sig = 'sell'
+                    elif sig in ('wait','stay','idle','nop'): sig = 'hold'
+                    try:
+                        q = int(float(rr.get(qty_col))) if rr.get(qty_col) is not None else 0
+                    except Exception:
+                        q = 0
+                    try:
+                        p = float(rr.get(price_col)) if (price_col and rr.get(price_col) is not None) else None
+                    except Exception:
+                        p = None
+                    suc = True
+                    try:
+                        if succ_col and rr.get(succ_col) is not None:
+                            v = str(rr.get(succ_col)).strip().lower()
+                            suc = (v in ('1','true','yes'))
+                    except Exception:
+                        suc = True
+                    if not suc:
+                        continue
+                    if sig == 'hold' or q <= 0:
+                        continue
+                    if p is None:
+                        continue
+                    eff_p = float(p)
+                    ok_me = portfolio.execute_decision(symbol=symbol, quantity=int(q), price=eff_p, leverage=1.0, signal=sig)
+                    if ok_me and sig == 'buy':
+                        trade_amount = int(q) * eff_p
+                        commission_amt = trade_amount * commission_rate
+                        transfer_amt = trade_amount * (transfer_fee_rate if is_shanghai else 0.0)
+                        portfolio.available_cash -= (commission_amt + transfer_amt)
+                        portfolio._update_total_asset()
+                        try:
+                            idx_in_days = open_days.index(dstr)
+                            next_sell = open_days[idx_in_days + 1] if idx_in_days + 1 < len(open_days) else None
+                            if next_sell:
+                                can_sell_after[symbol] = next_sell
+                        except Exception:
+                            pass
+                    elif ok_me and sig in ('sell','close'):
+                        trade_amount = int(q) * eff_p
+                        commission_amt = trade_amount * commission_rate
+                        transfer_amt = trade_amount * (transfer_fee_rate if is_shanghai else 0.0)
+                        stamp_duty_amt = trade_amount * stamp_duty_rate
+                        portfolio.available_cash -= (commission_amt + transfer_amt + stamp_duty_amt)
+                        portfolio._update_total_asset()
+                    try:
+                        _ = _supabase_upsert_manual_exec(run_id, symbol, str(rr.get('decision_date') or ''), dstr, sig, int(q), eff_p, True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         md_dict = {symbol: md_one}
         pf_json = portfolio.return_json()
@@ -779,6 +1407,30 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                     hold_days = len([d for d in window if d not in traded])
                 if hold_days is not None:
                     lines.append(f"- 从最早日期至今，除以上交易日外均为 hold（{hold_days} 天）")
+                try:
+                    last = last_k[-1]
+                    last_date = last.get('date')
+                    last_sig = str(last.get('signal')).lower()
+                    last_price = last.get('effective_price', last.get('price'))
+                    last_price_str = (f"{float(last_price):.2f}" if last_price is not None else "N/A")
+                    pnl_pct_str = None
+                    if symbol in portfolio.positions:
+                        pos = portfolio.positions[symbol]
+                        if getattr(pos, 'entry_price', None) and getattr(pos, 'current_price', None):
+                            try:
+                                epv = float(pos.entry_price)
+                                cpv = float(pos.current_price)
+                                if epv > 0:
+                                    pnl_pct = (cpv - epv) / epv
+                                    pnl_pct_str = f"{pnl_pct*100:.2f}%"
+                            except Exception:
+                                pnl_pct_str = None
+                    summary_line = f"- 最近一次动作：{last_date} {last_sig} at {last_price_str}"
+                    if pnl_pct_str:
+                        summary_line += f" | 当前持仓盈亏: {pnl_pct_str}"
+                    lines.append(summary_line)
+                except Exception:
+                    pass
                 recent_actions_text = "\n".join(lines)
         except Exception:
             recent_actions_text = None
@@ -789,9 +1441,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         # 预扣买入费用（佣金 + 过户费）并加入买入滑点，提高买入成本，避免买入后现金因费用/滑点为负
         fees_rate = (commission_rate + (transfer_fee_rate if is_shanghai else 0.0))
         try:
-            slippage_buy_pct = float(os.getenv('SLIPPAGE_BUY_PCT', '0.01'))  # 默认 1%
+            slippage_buy_pct = float(os.getenv('SLIPPAGE_BUY_PCT', '0.001'))
         except Exception:
-            slippage_buy_pct = 0.01
+            slippage_buy_pct = 0.001
         per_lot_total = price * (1.0 + slippage_buy_pct) * lot_size * (1.0 + fees_rate)
         max_buyable_lots = int(portfolio.available_cash // per_lot_total)
         md_one['llm_state'] = {
@@ -815,29 +1467,58 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         idx_in_days = open_days.index(dstr)
         pre_open = open_days[idx_in_days - 1] if (idx_in_days - 1) >= 0 else None
         ta_text = None
-        last_err = None
         attempts = 0
+        try:
+            idx_in_days = open_days.index(dstr)
+            prev_open_for_api = open_days[idx_in_days - 1] if (idx_in_days - 1) >= 0 else dstr
+        except Exception:
+            prev_open_for_api = dstr
+        daily_inputs, weekly_inputs = _fetch_daily_weekly_from_api(pro, ts_code, prev_open_for_api, 80, 40)
+        try:
+            d_cnt = len(daily_inputs)
+            w_cnt = len(weekly_inputs)
+            d_range = (daily_inputs[0]['date'] if d_cnt > 0 else None, daily_inputs[-1]['date'] if d_cnt > 0 else None)
+            w_range = (weekly_inputs[0]['date'] if w_cnt > 0 else None, weekly_inputs[-1]['date'] if w_cnt > 0 else None)
+            print(f"[DIFY] inputs ready | symbol={symbol} | daily_count={d_cnt} range={d_range[0]}~{d_range[1]} | weekly_count={w_cnt} range={w_range[0]}~{w_range[1]}")
+        except Exception:
+            pass
         while attempts < 3 and not ta_text:
             try:
-                ta_text = request_technical_analysis_dify(symbol, ts_code, dstr, pre_open or '')
+                _mode = (os.getenv('DIFY_RESPONSE_MODE') or 'streaming').strip().lower()
+                if _mode == 'streaming':
+                    ta_text = _request_technical_analysis_dify_streaming(symbol, daily_inputs, weekly_inputs, print_full=ta_print_full, excerpt_len=ta_excerpt_len)
+                else:
+                    ta_text = _request_technical_analysis_dify_v2(symbol, daily_inputs, weekly_inputs, print_full=ta_print_full, excerpt_len=ta_excerpt_len)
                 if ta_text:
                     md_one['technical_analysis'] = ta_text
-                    _frag = (ta_text or '')[:80].replace('\n', ' ').replace('"', '\"')
-                    print(f"节点：Dify 返回 | technical_analysis 长度={len(ta_text or '')} 片段=\"{_frag}\"")
+                    if ta_print_full:
+                        print(f"节点：Dify 返回 | technical_analysis 长度={len(ta_text or '')}\n{ta_text}")
+                    else:
+                        _frag = (ta_text or '')[:ta_excerpt_len].replace('\n', ' ').replace('"', '\"')
+                        print(f"节点：Dify 返回 | technical_analysis 长度={len(ta_text or '')} 片段=\"{_frag}\"")
                     break
                 else:
                     raise RuntimeError('empty_ta')
             except Exception as e:
-                last_err = e
                 attempts += 1
-                if attempts < 3:
-                    logger.warning(f"Dify 技术分析获取失败（第{attempts}次）：{e}，2 秒后重试…")
+                max_attempts = 3
+                try:
+                    max_attempts = int(os.getenv('DIFY_MAX_ATTEMPTS') or '3')
+                except Exception:
+                    max_attempts = 3
+                retry_sleep = 2.0
+                try:
+                    retry_sleep = float(os.getenv('DIFY_RETRY_INTERVAL') or '2')
+                except Exception:
+                    retry_sleep = 2.0
+                if attempts < max_attempts:
+                    logger.warning(f"Dify 技术分析获取失败（第{attempts}次）：{e}，{retry_sleep} 秒后重试…")
                     try:
-                        time.sleep(2)
+                        time.sleep(retry_sleep)
                     except Exception:
                         pass
         if not ta_text:
-            logger.warning(f"技术分析不可用，继续量化回测：{last_err}")
+            logger.warning("技术分析不可用（保持严格历史窗口，不回退最新行情源）")
 
         # 首日提示：仅输出关键节点
         if not first_day_debug_done:
@@ -879,9 +1560,35 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                 quantity_lots = int(float(args.get('quantity', 0.0) or 0.0))
                 leverage = float(args.get('leverage', 1.0) or 1.0)
                 entry_price = price
+                exec_high = df.iloc[i]['high'] if 'high' in df.columns and not pd.isna(df.iloc[i]['high']) else None
+                exec_low = df.iloc[i]['low'] if 'low' in df.columns and not pd.isna(df.iloc[i]['low']) else None
+                next_open_avail = False
+                try:
+                    if i + 1 < len(df):
+                        next_row = df.iloc[i + 1]
+                        if 'open' in df.columns and not pd.isna(next_row['open']):
+                            next_open_raw = float(next_row['open'])
+                            entry_price = next_open_raw
+                            next_open_avail = True
+                            exec_high = float(next_row['high']) if 'high' in df.columns and not pd.isna(next_row['high']) else exec_high
+                            exec_low = float(next_row['low']) if 'low' in df.columns and not pd.isna(next_row['low']) else exec_low
+                            next_close_raw = float(next_row['close']) if 'close' in df.columns and not pd.isna(next_row['close']) else None
+                            if next_close_raw is not None and price and price > 0 and signal == 'buy':
+                                pct_chg_next = (next_close_raw - float(price)) / float(price)
+                                limit_threshold = 0.095
+                                try:
+                                    if str(symbol).startswith(('300', '688')):
+                                        limit_threshold = 0.195
+                                except Exception:
+                                    pass
+                                if (pct_chg_next > limit_threshold) and (next_open_raw == exec_high) and (next_open_raw == exec_low):
+                                    signal = 'hold'
+                                    quantity_lots = 0
+                except Exception:
+                    pass
                 reasoning = str(decision_obj.get('reasoning', '') or '')
 
-                # 本地执行前的硬约束：冷却期禁止买入；下跌阶段总持仓≤3手
+                # 本地执行前的硬约束：冷却期禁止买入；下跌阶段总持仓≤总容量15%
                 try:
                     flags = compute_strategy_flags(md_one)
                 except Exception:
@@ -890,12 +1597,17 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                     signal = 'hold'
                     quantity_lots = 0
                 if signal == 'buy' and bool(flags.get('is_in_downtrend_cap')):
-                    cap_remaining = max(0, 3 - current_position_lots)
-                    if quantity_lots > cap_remaining:
-                        quantity_lots = cap_remaining
-                    if quantity_lots <= 0:
-                        signal = 'hold'
-                        quantity_lots = 0
+                    try:
+                        total_capacity_lots = int(current_position_lots) + int(max_buyable_lots)
+                        limit_lots = max(1, int(total_capacity_lots * 0.15))
+                        cap_remaining = max(0, limit_lots - int(current_position_lots))
+                        if quantity_lots > cap_remaining:
+                            quantity_lots = cap_remaining
+                        if quantity_lots <= 0:
+                            signal = 'hold'
+                            quantity_lots = 0
+                    except Exception:
+                        pass
 
                 # 超买优先级：禁止任何买入；若有仓且可卖，则优先减仓
                 allowed_date = can_sell_after.get(symbol)
@@ -920,12 +1632,19 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                     signal = 'hold'
                     quantity_lots = 0
 
-                # EMA20 邻近加仓：有仓时加仓需接近 EMA20，扩张态拒绝
                 try:
                     ema20_close = md_one.get('current_close_20_ema')
                     if signal == 'buy' and current_position_lots > 0 and ema20_close is not None and float(ema20_close) > 0:
                         ratio = float(price) / float(ema20_close)
-                        if ratio >= 1.03:
+                        threshold = 1.03
+                        try:
+                            is_super = bool(flags.get('is_super_trend'))
+                            is_mom = bool(flags.get('is_momentum_buy'))
+                            if is_super or is_mom:
+                                threshold = 1.10
+                        except Exception:
+                            pass
+                        if ratio >= threshold:
                             signal = 'hold'
                             quantity_lots = 0
                 except Exception:
@@ -941,6 +1660,10 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                             quantity_lots = 0
                 except Exception:
                     pass
+
+                if signal == 'buy' and not next_open_avail:
+                    signal = 'hold'
+                    quantity_lots = 0
 
                 # 生成并保存当日 LLM 决策 JSON（按日期唯一覆盖）
                 try:
@@ -1000,20 +1723,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                 llm_fail_consecutive = (llm_fail_consecutive or 0) + 1
                 logger.error(f"DeepSeek 决策失败（第{llm_fail_consecutive}次）：{e}")
                 if llm_fail_consecutive >= 3:
-                    print("LLM 连续失败3次。按回车继续重试，或输入 q 退出当前标的回测。")
-                    try:
-                        user_inp = input("继续重试请直接回车；退出请输入 q: ").strip().lower()
-                    except Exception:
-                        user_inp = ''
-                    if user_inp == 'q':
-                        print("用户选择退出该标的回测。")
-                        return {}
-                    else:
-                        # 用户确认继续：重置失败计数，立即重试
-                        llm_fail_consecutive = 0
-                        continue
+                    print("LLM 连续失败3次。自动停止以保护配额/资金。")
+                    return {}
                 else:
-                    # 前两次失败：指数退避等待后重试
                     backoff_sec = min(60, 2 ** llm_fail_consecutive)
                     print(f"LLM 决策调用失败，将在 {backoff_sec}s 后重试（第{llm_fail_consecutive}次）。")
                     try:
@@ -1062,9 +1774,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
             # 预扣费用后的最大可买手数（佣金 + 过户费），避免买入后现金因费用为负
             fees_rate = (commission_rate + (transfer_fee_rate if is_shanghai else 0.0))
             try:
-                slippage_buy_pct = float(os.getenv('SLIPPAGE_BUY_PCT', '0.01'))
+                slippage_buy_pct = float(os.getenv('SLIPPAGE_BUY_PCT', '0.001'))
             except Exception:
-                slippage_buy_pct = 0.01
+                slippage_buy_pct = 0.001
             per_lot_total = entry_price * (1.0 + slippage_buy_pct) * lot_size * (1.0 + fees_rate)
             max_buyable_lots = int(portfolio.available_cash // per_lot_total)
             if quantity_lots > max_buyable_lots:
@@ -1078,12 +1790,12 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
                 entry_price = entry_price * (1.0 + slippage_buy_pct)
                 # 现实化成交价：夹逼在当日最高/最低之间
                 try:
-                    if day_high is not None and day_low is not None:
-                        entry_price = max(day_low, min(day_high, entry_price))
-                    elif day_high is not None:
-                        entry_price = min(day_high, entry_price)
-                    elif day_low is not None:
-                        entry_price = max(day_low, entry_price)
+                    if exec_high is not None and exec_low is not None:
+                        entry_price = max(exec_low, min(exec_high, entry_price))
+                    elif exec_high is not None:
+                        entry_price = min(exec_high, entry_price)
+                    elif exec_low is not None:
+                        entry_price = max(exec_low, entry_price)
                 except Exception:
                     pass
         elif signal == 'hold':
@@ -1092,18 +1804,46 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         elif signal in ('sell', 'close'):
             # 卖出/平仓采用负滑点的有效价格
             try:
-                slippage_sell_pct = float(os.getenv('SLIPPAGE_SELL_PCT', '0.01'))
+                slippage_sell_pct = float(os.getenv('SLIPPAGE_SELL_PCT', '0.001'))
             except Exception:
-                slippage_sell_pct = 0.01
+                slippage_sell_pct = 0.001
             entry_price = entry_price * (1.0 - slippage_sell_pct)
             # 现实化成交价：夹逼在当日最高/最低之间
             try:
-                if day_high is not None and day_low is not None:
-                    entry_price = max(day_low, min(day_high, entry_price))
-                elif day_high is not None:
-                    entry_price = min(day_high, entry_price)
-                elif day_low is not None:
-                    entry_price = max(day_low, entry_price)
+                if exec_high is not None and exec_low is not None:
+                    entry_price = max(exec_low, min(exec_high, entry_price))
+                elif exec_high is not None:
+                    entry_price = min(exec_high, entry_price)
+                elif exec_low is not None:
+                    entry_price = max(exec_low, entry_price)
+            except Exception:
+                pass
+
+            # 一字跌停模拟：若下一交易日为一字跌停，视为卖不出，强制 HOLD
+            try:
+                if next_open_avail and i + 1 < len(df):
+                    next_row = df.iloc[i + 1]
+                    next_open = float(next_row['open']) if 'open' in df.columns and not pd.isna(next_row['open']) else None
+                    next_high = float(next_row['high']) if 'high' in df.columns and not pd.isna(next_row['high']) else None
+                    next_low = float(next_row['low']) if 'low' in df.columns and not pd.isna(next_row['low']) else None
+                    next_close = float(next_row['close']) if 'close' in df.columns and not pd.isna(next_row['close']) else None
+                    pct_chg_next = None
+                    if next_close is not None and price and float(price) > 0:
+                        pct_chg_next = (next_close - float(price)) / float(price)
+                    limit_threshold = 0.095
+                    try:
+                        if str(symbol).startswith(('300', '688')):
+                            limit_threshold = 0.195
+                    except Exception:
+                        pass
+                    is_limit_down = (
+                        next_open is not None and next_high is not None and next_low is not None and pct_chg_next is not None and
+                        (next_open == next_low == next_high) and (pct_chg_next <= -limit_threshold)
+                    )
+                    if is_limit_down:
+                        print(f"⚠️ 一字跌停：{symbol} 次日开/高/低均为 {next_open:.2f}，跌幅 {pct_chg_next*100:.2f}% —— 视为无法卖出，强制 HOLD。")
+                        signal = 'hold'
+                        quantity = 0
             except Exception:
                 pass
 
@@ -1216,9 +1956,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         if ok and signal == 'buy':
             try:
                 idx_in_days = open_days.index(dstr)
-                next_open = open_days[idx_in_days + 1] if idx_in_days + 1 < len(open_days) else None
-                if next_open:
-                    can_sell_after[symbol] = next_open
+                next_sell = open_days[idx_in_days + 1] if idx_in_days + 1 < len(open_days) else None
+                if next_sell:
+                    can_sell_after[symbol] = next_sell
             except ValueError:
                 pass
 
@@ -1272,8 +2012,15 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
             cash_after = None
 
         eff_price = entry_price if ok and signal in ('buy','sell','close') else price
+        exec_date = None
+        try:
+            _next = _next_open_day_for(dstr)
+            exec_date = pd.to_datetime(_next, format='%Y%m%d').strftime('%Y-%m-%d') if _next else None
+        except Exception:
+            exec_date = None
         actions.append({
             'date': date_str,
+            'execution_date': exec_date,
             'price': price,
             'signal': signal,
             'quantity': quantity,
@@ -1290,9 +2037,9 @@ def run_backtest(symbol: str, start_date: str, end_date: str,
         eff_price = entry_price if ok and signal in ('buy','sell','close') else price
         _upsert_trades_csv(
             trades_csv_path,
-            header="date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price",
+            header="date,execution_date,price,signal,quantity,leverage,success,available_cash,total_asset,llm_ms,effective_price",
             date_key=date_str,
-            line=f"{date_str},{price:.4f},{signal},{int(quantity)},{leverage:.2f},{1 if ok else 0},{portfolio.available_cash:.2f},{portfolio.total_asset:.2f},{llm_ms},{eff_price:.4f}"
+            line=f"{date_str},{exec_date or ''},{price:.4f},{signal},{int(quantity)},{leverage:.2f},{1 if ok else 0},{portfolio.available_cash:.2f},{portfolio.total_asset:.2f},{llm_ms},{eff_price:.4f}"
         )
 
         ok_u_j, err_u_j = _r2_upload(llm_json_path, key_prefix='aitrading', run_id=run_id, symbol=symbol, start_date=start_date, end_date=dstr)
@@ -1514,12 +2261,15 @@ def main():
     parser.add_argument('--llm-ndjson', action='store_true', help='将 LLM 决策审计以 NDJSON 持久化并逐日单行打印')
     parser.add_argument('--sleep-seconds', type=int, default=3, help='每个交易日间的等待秒数')
     parser.add_argument('--strict-deps', action='store_true', help='严格依赖：云端失败即停')
+    parser.add_argument('--ta-full', action='store_true', help='打印完整技术分析文本')
+    parser.add_argument('--ta-excerpt-len', type=int, default=120, help='技术分析片段长度')
     # 新增：初始资金与费用参数、最小交易单位
     parser.add_argument('--cash', type=float, default=100000.0, help='初始资金，默认10万元')
     parser.add_argument('--lot-size', type=int, default=100, help='A股最小交易单位（股），默认100股')
     parser.add_argument('--commission-rate', type=float, default=0.0003, help='佣金费率，默认万3=0.03%')
     parser.add_argument('--stamp-duty-rate', type=float, default=0.0005, help='印花税（仅卖出），默认0.05%')
     parser.add_argument('--transfer-fee-rate', type=float, default=0.00001, help='过户费（双边），默认0.01‰=0.00001')
+    parser.add_argument('--output-root', type=str, default=None, help='输出根目录，默认 specs/backtest，可设为 specs/live')
     # 新增：交互模式与模型选择
     parser.add_argument('--interactive', action='store_true', help='启用交互式输入（选择模型与起止日期）')
     parser.add_argument('--model', choices=['deepseek-chat', 'deepseek-reasoner'], help='指定 DeepSeek 模型；若启用交互可忽略')
@@ -1538,13 +2288,25 @@ def main():
     llm_ndjson_flag = getattr(args, 'llm_ndjson', False)
     sleep_seconds = args.sleep_seconds
     strict_deps = getattr(args, 'strict_deps', False) or bool(os.getenv('STRICT_DEPS'))
+    cash_default = 100000.0
     cash = args.cash
+    try:
+        env_cash = os.getenv('BACKTEST_INITIAL_CASH')
+        if env_cash:
+            v = float(env_cash)
+            if cash == cash_default:
+                cash = v
+    except Exception:
+        pass
     lot_size = args.lot_size
     commission_rate = args.commission_rate
     stamp_duty_rate = args.stamp_duty_rate
     transfer_fee_rate = args.transfer_fee_rate
     interactive = args.interactive
     model_name = args.model or os.getenv('LLM_MODEL') or 'deepseek-chat'
+    ta_print_full_arg = getattr(args, 'ta_full', False)
+    ta_excerpt_len_arg = getattr(args, 'ta_excerpt_len', 120)
+    out_root = args.output_root or os.getenv('BACKTEST_OUTPUT_ROOT') or 'specs/backtest'
 
     # 交互式输入：允许在终端输入模型与日期，避免频繁敲命令
     def _read_date(prompt: str, default_val: str = None) -> str:
@@ -1627,13 +2389,17 @@ def main():
         for i, row in df_list.iterrows():
             sym = str(row['stock_code']).strip()
             st = str(row['start_date']).strip()
-            ed = str((row['end_date'] if 'end_date' in df_list.columns else '') or '').strip()
+            if 'end_date' in df_list.columns:
+                raw_ed = row['end_date']
+                ed = '' if pd.isna(raw_ed) else str(raw_ed).strip()
+            else:
+                ed = ''
             if not sym or not st:
                 print(f"跳过第{i}行：存在空值 sym={sym}, start={st}")
                 continue
-            if not ed:
+            if (not ed) or (ed.lower() == 'nan'):
                 ed = today_str
-                print(f"第{i}行未提供 end_date，默认使用今天：{ed}")
+                print(f"第{i}行未提供有效 end_date，默认使用今天：{ed}")
             # 规范化代码（补齐6位并确定交易所），内部 run_backtest 会再次统一
             base_sym, _exch = normalize_symbol(sym)
             sym = base_sym
@@ -1649,7 +2415,10 @@ def main():
                                   transfer_fee_rate=transfer_fee_rate,
                                   model_name=model_name,
                                   llm_ndjson=llm_ndjson_flag,
-                                  strict_deps=strict_deps)
+                                  strict_deps=strict_deps,
+                                  ta_print_full=ta_print_full_arg,
+                                  ta_excerpt_len=ta_excerpt_len_arg,
+                                  output_root=out_root)
             _print_summary(result)
         return
     else:
@@ -1664,7 +2433,10 @@ def main():
                               transfer_fee_rate=transfer_fee_rate,
                               model_name=model_name,
                               llm_ndjson=llm_ndjson_flag,
-                              strict_deps=strict_deps)
+                              strict_deps=strict_deps,
+                              ta_print_full=ta_print_full_arg,
+                              ta_excerpt_len=ta_excerpt_len_arg,
+                              output_root=out_root)
         if not result:
             print("回测失败或数据为空")
             sys.exit(1)

@@ -22,7 +22,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { useTranslations } from 'next-intl';
+import { useTranslations, useLocale } from 'next-intl';
 import dynamic from 'next/dynamic';
 
 const Plot = dynamic(() => import('react-plotly.js'), { ssr: false });
@@ -38,6 +38,8 @@ interface TradePlan {
   stop_loss?: string;
   reasoning?: string;
   technical_analysis?: string;
+  position_total?: number | null;
+  profit?: number | null;
 }
 
 interface PerformanceSummary {
@@ -73,6 +75,15 @@ interface KlineData {
 export default function TradingPage({ params }: { params: Promise<{ stock_code: string }> }) {
   const { stock_code } = use(params);
   const t = useTranslations('TradingPage');
+  const locale = useLocale();
+  const isZhLocale = String(locale || '').toLowerCase().startsWith('zh');
+  const hdrDate = isZhLocale ? '日期' : 'Date';
+  const hdrSignal = isZhLocale ? '信号' : 'Signal';
+  const hdrQuantity = isZhLocale ? '数量' : 'Quantity';
+  const hdrEntryPrice = isZhLocale ? '入场价' : 'Entry Price';
+  const hdrPosition = isZhLocale ? '持仓' : 'Position';
+  const hdrProfit = isZhLocale ? '当日盈亏' : 'Profit';
+  const hdrTA = isZhLocale ? '技术分析' : 'T-A';
   const [tradePlans, setTradePlans] = useState<TradePlan[]>([]);
   const [summary, setSummary] = useState<PerformanceSummary | null>(null);
   const [chartData, setChartData] = useState<SinceInceptionValue[]>([]);
@@ -84,6 +95,8 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
   const [showHold, setShowHold] = useState(false);
   const [modalTitle, setModalTitle] = useState<string>("");
   const [modalContent, setModalContent] = useState<string>("");
+  const [showEquity, setShowEquity] = useState(true);
+  const [showReturn, setShowReturn] = useState(true);
 
   const isStale = useMemo(() => {
     if (!chartData || chartData.length === 0) return false;
@@ -183,6 +196,7 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
 
   const formatCurrency = (value: number) => new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY' }).format(value);
   const formatYAxis = (tick: number) => `${(tick / 10000).toFixed(1)}万`;
+  const formatPct = (v: number) => `${v.toFixed(2)}%`;
 
   const openModal = (title: string, content: string) => {
     setModalTitle(title);
@@ -201,6 +215,67 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
       ticks.push(yearEnd);
     }
     return Array.from(new Set(ticks)).sort();
+  };
+
+  const chartWithReturn = useMemo(() => {
+    if (!chartData || chartData.length === 0) return [] as (SinceInceptionValue & { return_pct: number })[];
+    const initial = chartData[0].equity || 1;
+    return chartData.map(d => ({
+      ...d,
+      return_pct: ((d.equity / initial) - 1) * 100,
+    }));
+  }, [chartData]);
+
+  const equityRange = useMemo(() => {
+    if (!chartWithReturn.length) return { min: 0, max: 0 };
+    let min = chartWithReturn[0].equity;
+    let max = chartWithReturn[0].equity;
+    for (const d of chartWithReturn) {
+      if (d.equity < min) min = d.equity;
+      if (d.equity > max) max = d.equity;
+    }
+    const pad = Math.max((max - min) * 0.05, 10000);
+    return { min: min - pad, max: max + pad };
+  }, [chartWithReturn]);
+
+  const returnRange = useMemo(() => {
+    if (!chartWithReturn.length) return { min: 0, max: 0 };
+    let min = chartWithReturn[0].return_pct;
+    let max = chartWithReturn[0].return_pct;
+    for (const d of chartWithReturn) {
+      if (d.return_pct < min) min = d.return_pct;
+      if (d.return_pct > max) max = d.return_pct;
+    }
+    const span = max - min;
+    const pad = Math.max(span * 0.1, 1);
+    return { min: min - pad, max: max + pad };
+  }, [chartWithReturn]);
+
+  const labelEquity = isZhLocale ? '资金' : 'Equity';
+  const labelReturn = isZhLocale ? '收益率' : 'Return';
+
+  const renderLegend = (props: any) => {
+    const items = [
+      { key: 'equity', color: '#8884d8', name: labelEquity, active: showEquity },
+      { key: 'return_pct', color: '#82ca9d', name: labelReturn, active: showReturn },
+    ];
+    return (
+      <div className="w-full flex justify-center items-center gap-6 text-sm">
+        {items.map(it => (
+          <button
+            key={it.key}
+            className={`flex items-center gap-2 ${it.active ? '' : 'opacity-50'}`}
+            onClick={() => {
+              if (it.key === 'equity') setShowEquity(v => !v);
+              if (it.key === 'return_pct') setShowReturn(v => !v);
+            }}
+          >
+            <span className="inline-block w-3 h-3 rounded" style={{ backgroundColor: it.color }} />
+            <span>{it.name}</span>
+          </button>
+        ))}
+      </div>
+    );
   };
 
   const defaultXRange = useMemo(() => {
@@ -227,7 +302,7 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
               <CardTitle className="text-sm font-medium">{t('initialCapital')}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{formatCurrency(100000)}</div>
+              <div className="text-2xl font-bold">{formatCurrency(chartData[0]?.equity ?? 100000)}</div>
             </CardContent>
           </Card>
           <Card className="bg-background">
@@ -240,18 +315,16 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
           </Card>
           <Card className="bg-background">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{t('change24h')}</CardTitle>
+              <CardTitle className="text-sm font-medium">{isZhLocale ? '上一个交易日变动' : 'Prev Trading Day Change'}</CardTitle>
             </CardHeader>
             <CardContent>
-              {isStale ? (
-                <div className="text-2xl font-bold text-muted-foreground">—</div>
-              ) : (
-                <div className={`text-2xl font-bold ${summary.change24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {formatCurrency(summary.change24h)}
+              <div className={`text-2xl font-bold ${summary.change24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                {formatCurrency(summary.change24h)}
+              </div>
+              {chartData.length > 1 && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {isZhLocale ? '上一个交易日：' : 'Prev day:'} {new Date(chartData[chartData.length - 2].timestamp).toLocaleDateString(isZhLocale ? 'zh-CN' : 'en-CA')} ，{isZhLocale ? '资金' : 'Equity'}：{formatCurrency(chartData[chartData.length - 2].equity)}
                 </div>
-              )}
-              {isStale && (
-                <div className="mt-1 text-xs text-muted-foreground">{t('staleNotice')}</div>
               )}
             </CardContent>
           </Card>
@@ -265,7 +338,7 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={chartData}>
+              <LineChart data={chartWithReturn}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis 
                   dataKey="timestamp" 
@@ -274,16 +347,18 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
                   domain={['dataMin', 'dataMax']}
                   type="category"
                 />
-                <YAxis 
-                  tickFormatter={formatYAxis} 
-                  domain={['dataMin - 10000', 'dataMax + 10000']} 
-                />
+                <YAxis yAxisId="left" tickFormatter={formatYAxis} domain={[equityRange.min, equityRange.max]} />
+                <YAxis yAxisId="right" orientation="right" tickFormatter={formatPct} domain={[returnRange.min, returnRange.max]} />
                 <Tooltip 
                   labelFormatter={(label) => new Date(label).toLocaleDateString('en-CA')}
-                  formatter={(value: number) => [formatCurrency(value), t('currentEquity')]}
+                  formatter={(value: number, name: string) => {
+                    if (name === 'equity' || name === labelEquity) return [formatCurrency(value), labelEquity];
+                    return [formatPct(value), labelReturn];
+                  }}
                 />
-                <Legend />
-                <Line type="monotone" dataKey="equity" stroke="#8884d8" dot={false} activeDot={{ r: 8 }} />
+                <Legend content={renderLegend} />
+                <Line yAxisId="left" name={labelEquity} hide={!showEquity} type="monotone" dataKey="equity" stroke="#8884d8" dot={false} activeDot={{ r: 8 }} />
+                <Line yAxisId="right" name={labelReturn} hide={!showReturn} type="monotone" dataKey="return_pct" stroke="#82ca9d" dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </CardContent>
@@ -386,11 +461,13 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-1/5 pr-4">{t('tableDate')}</TableHead>
-                    <TableHead className="w-1/5 pr-4">{t('tableSignal')}</TableHead>
-                    <TableHead className="w-1/5 text-right pr-6">{t('tableQuantity')}</TableHead>
-                    <TableHead className="w-1/5 text-right pr-6">{t('tableEntryPrice')}</TableHead>
-                    <TableHead className="w-1/5 pr-4">T-A</TableHead>
+                    <TableHead className="w-[14.285%] pr-4">{hdrDate}</TableHead>
+                    <TableHead className="w-[14.285%] pr-4">{hdrSignal}</TableHead>
+                    <TableHead className="w-[14.285%] text-right pr-6">{hdrQuantity}</TableHead>
+                    <TableHead className="w-[14.285%] text-right pr-6">{hdrEntryPrice}</TableHead>
+                    <TableHead className="w-[14.285%] text-right pr-6">{hdrPosition}</TableHead>
+                    <TableHead className="w-[14.285%] text-right pr-6">{hdrProfit}</TableHead>
+                    <TableHead className="w-[14.285%] pr-4">{hdrTA}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -412,6 +489,14 @@ export default function TradingPage({ params }: { params: Promise<{ stock_code: 
                       </TableCell>
                       <TableCell className="text-right pr-6">{plan.quantity}</TableCell>
                       <TableCell className="text-right pr-6">{plan.entry_price}</TableCell>
+                      <TableCell className="text-right pr-6">{plan.position_total != null ? plan.position_total : ''}</TableCell>
+                      <TableCell className="text-right pr-6">
+                        {plan.profit != null ? (
+                          <span className={plan.profit >= 0 ? 'text-red-500 font-medium' : 'text-green-500 font-medium'}>
+                            {formatCurrency(plan.profit)}
+                          </span>
+                        ) : ''}
+                      </TableCell>
                       <TableCell className="pr-4">
                         <button
                           className="btn btn-sm btn-ghost"
