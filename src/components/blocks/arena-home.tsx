@@ -57,8 +57,8 @@ export default async function ArenaHome({ locale }: Props) {
     ? manualBacktestCodes.filter((c) => supabaseSet.has(c))
     : supabaseCodes;
   const primaryLiveHref = liveCodes[0]
-    ? `http://localhost:3000/trading/${liveCodes[0]}`
-    : `http://localhost:3000/trading/512480`;
+    ? toTrading(liveCodes[0])
+    : toTrading('512480');
 
   return (
     <div>
@@ -81,8 +81,8 @@ export default async function ArenaHome({ locale }: Props) {
         ) : (
           <div className="mt-6 grid gap-6 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
             {liveCodes.map((code) => (
-              <a key={code} href={`http://localhost:3000/trading/${code}`} className="group">
-                <div className="tooltip tooltip-bottom w-full" data-tip={t("enter")}>
+              <Link key={code} href={toTrading(code)} className="group">
+                <div className="tooltip tooltip-bottom w-full" data-tip={t("enter")}> 
                   <div className="card bg-base-100 transition shadow-sm group-hover:shadow-xl">
                     <div className="card-body p-6">
                       <div className="flex items-center justify-between">
@@ -92,7 +92,7 @@ export default async function ArenaHome({ locale }: Props) {
                     </div>
                   </div>
                 </div>
-              </a>
+              </Link>
             ))}
           </div>
         )}
