@@ -33,29 +33,6 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
 
   const [showFeedback, setShowFeedback] = useState<boolean>(false);
 
-  const fetchUserInfo = async function () {
-    try {
-      const resp = await fetch("/api/get-user-info", {
-        method: "POST",
-      });
-
-      if (!resp.ok) {
-        throw new Error("fetch user info failed with status: " + resp.status);
-      }
-
-      const { code, message, data } = await resp.json();
-      if (code !== 0) {
-        throw new Error(message);
-      }
-
-      setUser(data);
-
-      updateInvite(data);
-    } catch (e) {
-      console.log("fetch user info failed");
-    }
-  };
-
   const updateInvite = async (user: User) => {
     try {
       if (user.invited_by) {
@@ -113,6 +90,29 @@ export const AppContextProvider = ({ children }: { children: ReactNode }) => {
       fetchUserInfo();
     }
   }, [session]);
+
+  const fetchUserInfo = async function () {
+    try {
+      const resp = await fetch("/api/get-user-info", {
+        method: "POST",
+      });
+
+      if (!resp.ok) {
+        throw new Error("fetch user info failed with status: " + resp.status);
+      }
+
+      const { code, message, data } = await resp.json();
+      if (code !== 0) {
+        throw new Error(message);
+      }
+
+      setUser(data);
+
+      updateInvite(data);
+    } catch (e) {
+      console.log("fetch user info failed");
+    }
+  };
 
   return (
     <AppContext.Provider

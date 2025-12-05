@@ -1,0 +1,4 @@
+- [x] Optimize backtest worker to support resuming from checkpoints (Fixes issue where pausing/resuming restarted the backtest)
+- [x] Add retry mechanism with exponential backoff for DeepSeek API calls in `trade_decision_simple_AI.py` to handle network failures and transient errors.
+- [x] Update `core_backtest.py` to strictly block buying when Close Price hits the limit up threshold (not just one-bar limit), and block selling when Close Price hits limit down.
+- [x] Implement slippage (default 0.1%) and High/Low price clamping in `core_backtest.py` for more realistic trade execution.

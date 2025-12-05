@@ -128,3 +128,92 @@ export const feedbacks = pgTable("feedbacks", {
   content: text(),
   rating: integer(),
 });
+
+// --- Trading Engine Tables ---
+
+// Runs table (Job Queue)
+export const runs = pgTable("runs", {
+  run_id: varchar({ length: 255 }).primaryKey(),
+  user_id: varchar({ length: 255 }),
+  stock_code: varchar({ length: 50 }),
+  start_date: varchar({ length: 50 }),
+  end_date: varchar({ length: 50 }),
+  status: varchar({ length: 50 }).notNull().default("pending"), // pending, running, completed, failed
+  strategy_config: text(), // JSON string
+  created_at: timestamp({ withTimezone: true }).defaultNow(),
+  finished_at: timestamp({ withTimezone: true }),
+});
+
+// Trades table
+export const trades = pgTable("trades", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  run_id: varchar({ length: 255 }).notNull(),
+  symbol: varchar({ length: 50 }).notNull(),
+  date: varchar({ length: 50 }).notNull(), // YYYY-MM-DD
+  side: varchar({ length: 20 }), // buy, sell, hold
+  signal: varchar({ length: 20 }),
+  qty: integer(),
+  price: integer(), // Using integer for cents or raw float? Python uses float. Let's use real/double precision if available or keep standard. Drizzle 'real' is safer for prices.
+  effective_price: integer(),
+  cash_before: integer(),
+  cash_after: integer(),
+  position_before: integer(),
+  position_after: integer(),
+  pnl: integer(),
+  note: text(),
+}, (table) => [
+  uniqueIndex("trades_run_symbol_date_idx").on(table.run_id, table.symbol, table.date),
+]);
+
+// Daily Metrics table (Performance)
+export const daily_metrics = pgTable("daily_metrics", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  run_id: varchar({ length: 255 }).notNull(),
+  symbol: varchar({ length: 50 }).notNull(),
+  date: varchar({ length: 50 }).notNull(),
+  nav: integer(), // Float stored as... wait, Drizzle usually maps specific types.
+  cash: integer(),
+  position: integer(),
+  daily_return: integer(),
+  equity: integer(),
+}, (table) => [
+  uniqueIndex("metrics_run_symbol_date_idx").on(table.run_id, table.symbol, table.date),
+]);
+
+// OHLC table (Market Data Cache)
+export const ohlc = pgTable("ohlc", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  run_id: varchar({ length: 255 }),
+  symbol: varchar({ length: 50 }).notNull(),
+  date: varchar({ length: 50 }).notNull(),
+  open: integer(),
+  high: integer(),
+  low: integer(),
+  close: integer(),
+  source: varchar({ length: 50 }),
+}, (table) => [
+  uniqueIndex("ohlc_symbol_date_idx").on(table.symbol, table.date),
+]);
+
+// Checkpoints table
+export const checkpoints = pgTable("checkpoints", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  run_id: varchar({ length: 255 }).notNull(),
+  symbol: varchar({ length: 50 }).notNull(),
+  date: varchar({ length: 50 }).notNull(),
+  reason: text(),
+}, (table) => [
+  uniqueIndex("checkpoints_run_symbol_date_idx").on(table.run_id, table.symbol, table.date),
+]);
+
+// Errors table
+export const errors = pgTable("error", { // Note: Python uses table name 'error'
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  run_id: varchar({ length: 255 }),
+  symbol: varchar({ length: 50 }),
+  date: varchar({ length: 50 }),
+  source: varchar({ length: 50 }),
+  code: varchar({ length: 50 }),
+  message: text(),
+  raw: text(), // JSON string
+});

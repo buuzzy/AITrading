@@ -9,9 +9,9 @@ const isCloudflareWorker =
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 
 export function db() {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is not set");
+    throw new Error("DATABASE_URL or POSTGRES_URL is not set");
   }
 
   // In Cloudflare Workers, create new connection each time

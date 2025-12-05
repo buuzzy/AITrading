@@ -1,10 +1,9 @@
-"""
-Trading Decision Provider - Generates trading signals based on market data
-"""
+"Trading Decision Provider - Generates trading signals based on market data"
 from typing import Dict, Any
 import json
 import math
 import os
+import time
 import requests
 import dotenv
 dotenv.load_dotenv()
@@ -14,59 +13,55 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 LLM_MODEL_ENV = os.getenv("LLM_MODEL")
 
 # 模块级：新增 build_market_prompt（导出给 backtest.py 使用）
-SYSTEM_PROMPT_TEXT = (
-    "You are a Contrarian A-share Trading Agent. You profit from market overreaction.\n"
-    "Your strategy is: Buy when others are fearful, Sell when others are greedy.\n"
+JSON_FORMAT_INSTRUCTIONS = (
+    "\n*** 实盘交易执行定价（关键） ***\n"
+    "你正在下达真实的交易订单。为了确保在市场波动中成交：\n"
+    "- **买入订单 (BUY)**：设置 'limit_price' 比当前价高 1%~2%。（例如：当前价100，limit_price=101.5）。如果急于入场（超级趋势），可设高 2%。\n"
+    "- **卖出订单 (SELL)**：设置 'limit_price' 比当前价低 1%~2%。（例如：当前价100，limit_price=98.5）。如果趋势破位，设低 2% 以确保逃顶。\n"
+    "- **持有 (HOLD)**：limit_price = 0。\n"
     "\n"
-    "*** CRITICAL: HOW TO USE EXTERNAL TA (THE 'SENTIMENT INDICATOR') ***\n"
-    "The provided 'EXTERNAL TECHNICAL ANALYSIS' represents the 'Naive Crowd Sentiment'.\n"
-    "You must use it as a CONTRARIAN INDICATOR in extreme zones, BUT respect the TREND:\n"
-    "\n"
-    "1. THE 'SUPER TREND' EXCEPTION (HIGHEST PRIORITY):\n"
-    "   - IF `is_super_trend` is True:\n"
-    "   - ACTION: DO NOT SELL even if RSI is high (unless RSI > 90). IGNORE Bearish TA unless price breaks EMA10.\n"
-    "   - INTENT: Ride the bubble. The crowd is greedy, but the trend is too strong to short.\n"
-    "\n"
-    "2. THE 'BULL TRAP' SCENARIO (Normal Uptrend -> SELL):\n"
-    "   - IF `is_super_trend` is False AND External TA says 'Bullish'...\n"
-    "   - AND Quant flags show `is_extreme_overbought` OR RSI(6) > 80:\n"
-    "   - ACTION: SELL or CLOSE positions.\n"
-    "\n"
-    "3. THE 'BEAR TRAP' SCENARIO (TA says Bearish -> YOU BUY):\n"
-    "   - IF External TA says 'Downtrend', 'Bearish'...\n"
-    "   - AND Quant flags show `is_momentum_buy` OR price is near support (EMA20/Bollinger Lower) OR RSI < 30:\n"
-    "   - ACTION: BUY ONLY IF Quant flags confirm support (e.g., Price near Bollinger Lower/EMA20 OR RSI < 30). DO NOT BUY on 'Fear' alone if price is in free-fall without support.\n"
-    "\n"
-    "*** IMPORTANT: TIMING & EXECUTION ***\n"
-    "You are analyzing market data AFTER the market close (Day T).\n"
-    "Your 'Buy' signal will be executed at the OPEN PRICE of the NEXT TRADING DAY (Day T+1).\n"
-    "\n"
-    "*** EXECUTION RULES ***\n"
-    "- Buying:\n"
-    "  - If 'Bear Trap' or 'Cooldown Release' detected: BUY.\n"
-    "  - **Pyramiding**: If holding position with profit > 5% AND `is_momentum_buy` is True AND RSI(6) < 80: ADD position (Aggressive, but avoid overheating).\n"
-    "- Selling Rules:\n"
-    "  - **Trend Break** (Close < EMA20): MUST CLOSE ALL positions (Exit).\n"
-    "  - **Bull Trap** (RSI>80 & Not Super Trend): SELL 50% or CLOSE.\n"
-    "  - **Profit Taking**:\n"
-    "    - High RSI: If Not Super Trend, Profit > 10% and RSI > 70: SELL 50%.\n"
-    "    - Momentum Fades: If Not Super Trend, Profit > 15% and MACD Histogram < 0 (Momentum lost): SELL 50% to protect profits.\n"
-    "- Stop-Loss Authority:\n"
-    "  - Any 'stop_loss' you set is advisory; you must issue SELL/CLOSE on the next trading day to execute it. The engine will not auto-trigger stop-loss.\n"
-    "\n"
-    "*** REAL-WORLD EXECUTION PRICING (CRITICAL) ***\n"
-    "You are placing REAL orders. To ensure execution against market gaps:\n"
-    "- **BUY Orders**: Set 'limit_price' 1%~2% HIGHER than Current Price. (e.g., if Price is 100, limit_price=101.5). If you are desperate (Super Trend), use 2%.\n"
-    "- **SELL Orders**: Set 'limit_price' 1%~2% LOWER than Current Price. (e.g., if Price is 100, limit_price=98.5). If Trend Breaks, use 2% to flee.\n"
-    "- **HOLD**: limit_price = 0.\n"
-    "\n"
-    "Output strictly in JSON format with 'trade_signal_args':\n"
+    "请严格输出 JSON 格式，包含 'trade_signal_args' 键：\n"
     "{\n"
-    "  'symbol': '...', 'signal': '...', 'quantity': ...,\n"
+    "  'symbol': '...', 'signal': '...', 'quantity': 整数手数 (Integer Lots, NOT Shares! 1手=100股. e.g. output 15 for 1500 shares),\n"
     "  'confidence': float,\n"
     "  'limit_price': float,\n"
     "  'stop_loss': float, 'invalidation_condition': '...'\n"
-    "}" 
+    "}"
+)
+
+SYSTEM_PROMPT_TEXT = (
+    "你是一个A股量化交易智能体。你必须严格基于数学指标和市场结构做出决策。\n"
+    "你的目标是捕捉趋势并避免大幅回撤。\n"
+    "\n"
+    "*** 决策框架 ***\n"
+    "分析提供的市场数据（OHLC, EMA, MACD, RSI等）和持仓状态。\n"
+    "\n"
+    "1. 趋势识别：\n"
+    "   - **上升趋势**：价格 > EMA20, MACD > 0, 高点/低点抬高。\n"
+    "   - **下降趋势**：价格 < EMA20, MACD < 0, 高点/低点降低。\n"
+    "\n"
+    "2. 入场信号 (BUY)：\n"
+    "   - **趋势跟随**：价格带量突破 EMA20。MACD 柱状图翻红且上升。RSI > 50 但 < 70。\n"
+    "   - **回调买入**：上升趋势中，价格回踩 EMA20 或布林带中/下轨并反弹。RSI 回落至 40-50。\n"
+    "   - **动能突破**：强势突破，RSI 上升（但 < 80）。\n"
+    "\n"
+    "3. 离场信号 (SELL/CLOSE)：\n"
+    "   - **趋势反转**：价格连续2日收盘低于 EMA20。这是硬性离场规则。\n"
+    "   - **动能衰竭**：MACD 柱状图背离（价高但动能弱）。RSI 从超买区回落。\n"
+    "   - **超买**：RSI > 80 提示风险，考虑部分止盈。\n"
+    "   - **止损**：价格跌破预设止损位（如 -5%）。\n"
+    "\n"
+    "*** 执行规则 ***\n"
+    "- **买入**：\n"
+    "   - 仅在有可用现金时买入。\n"
+    "   - 谨慎使用“加仓”：仅在趋势极强 (`is_momentum_buy`=True) 且浮盈 > 5% 时加仓。\n"
+    "- **卖出**：\n"
+    "   - A股为 T+1 制度。只能卖出持仓时间 >= 1天的股票。\n"
+    "   - 若趋势破坏（收盘 < EMA20）：必须清仓以保护本金。\n"
+    "\n"
+    "*** 输出 ***\n"
+    "请先提供一段简洁的中文“分析理由 (reasoning)”，解释你对指标的判断，随后输出 JSON 决策。"
+    + JSON_FORMAT_INSTRUCTIONS
 )
 
 def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
@@ -106,12 +101,11 @@ def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
         (hist_prev > hist_prev2) and (hist_last > hist_prev)
     )
 
-    # 3. 计算近窗均量 (用于事实核查)
+    # 3. 计算近窗均量
     try:
         vol_series = market_data.get('factor_series_vol') or []
         vs = [ _to_float(x) for x in vol_series ]
         vs = [ x for x in vs if x is not None ]
-        # 如果数据不足30天，取现有长度
         avg_vol_30 = (sum(vs[-30:]) / max(1, len(vs[-30:]))) if vs else None
     except Exception:
         avg_vol_30 = None
@@ -154,24 +148,21 @@ def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
         (rsi6 is not None and rsi6 <= 30.0) and
         (not mean_rev_disabled)
     )
-    # 超级趋势：价格在EMA20之上，MACD红柱，RSI强势
     is_super_trend = (
         (price is not None and ema20 is not None and price > ema20) and
         (rsi6 is not None and rsi6 >= 65.0) and
         macd_hist_positive
     )
-    # 极度超买：突破上轨且RSI极高
     is_extreme_overbought = (
         (price is not None and boll_upper is not None and price >= (boll_upper * 1.02)) and
         (rsi6 is not None and rsi6 >= 85.0)
     )
-    # 动能买入：MACD红柱上升，RSI处于强势区
     is_momentum_buy = (
         macd_hist_positive and macd_hist_rising and
         (rsi12 is not None and rsi12 > 50.0 and rsi12 < 80.0)
     )
     
-    is_overbought_sell = False # 永久关闭普通超买卖出
+    is_overbought_sell = False 
     
     is_trend_invalidation_sell = (
         (hist_last is not None and hist_prev is not None and hist_last < hist_prev) and
@@ -185,30 +176,6 @@ def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
     close_near_ema20_1pct = (
         price is not None and ema20 is not None and ema20 > 0 and (abs(price/ema20 - 1.0) <= 0.01)
     )
-
-    # 6. 事实核查：计算 Trap Disabled (熔断反向指标)
-    bull_trap_disabled = False
-    bear_trap_disabled = False
-    try:
-        # 优先使用 backtest 传入的 today_change_pct
-        tc = today_change_pct if today_change_pct is not None else (pct_curr/100.0 if pct_curr is not None else None)
-        
-        # 计算乖离率
-        ratio = (price/ema20) if (price is not None and ema20 is not None and ema20 > 0) else None
-        
-        if tc is not None:
-            # 规则 A：真突破（放量大阳线） -> 禁用诱多判定（允许追涨）
-            # 量比 > 2.0 且 涨幅 > 5%
-            if (avg_vol_30 is not None and vol_curr is not None and avg_vol_30 > 0):
-                if (vol_curr >= 2.0 * avg_vol_30) and (tc >= 0.05):
-                    bull_trap_disabled = True
-            
-            # 规则 B：真崩盘（暴跌破位） -> 禁用诱空判定（禁止接飞刀）
-            # 跌幅 > 5% 或 价格低于EMA20 5%以上
-            if (tc <= -0.05) or (ratio is not None and ratio <= 0.95):
-                bear_trap_disabled = True
-    except Exception:
-        pass
 
     is_cooldown_release_met = False
     try:
@@ -233,8 +200,8 @@ def compute_strategy_flags(market_data: Dict[str, Any]) -> Dict[str, bool]:
         'is_in_buy_cooldown': bool(is_in_buy_cooldown),
         'macd_hist_rising_2bars': bool(macd_hist_rising_2bars),
         'close_near_ema20_1pct': bool(close_near_ema20_1pct),
-        'bull_trap_disabled': bool(bull_trap_disabled),
-        'bear_trap_disabled': bool(bear_trap_disabled),
+        'bull_trap_disabled': False, # Disabled legacy feature
+        'bear_trap_disabled': False, # Disabled legacy feature
         'is_cooldown_release_met': bool(is_cooldown_release_met),
     }
 
@@ -252,11 +219,11 @@ def _fmt_number(value: Any, decimals: int = 2) -> str:
 
 def portfolio_to_string(portfolio_json: Dict[str, Any], symbol: str = None) -> str:
     """Convert portfolio JSON to a concise, human‑readable summary."""
-    result_string = "HERE IS YOUR ACCOUNT INFORMATION & PERFORMANCE\n"
+    result_string = "【账户资金与持仓状态】\n"
 
     timestamp = portfolio_json.get('timestamp')
     if timestamp:
-        result_string += f"As of: {timestamp}\n"
+        result_string += f"时间: {timestamp}\n"
 
     initial_cash = float(portfolio_json.get('initial_cash', 0) or 0)
     total_asset = float(portfolio_json.get('total_asset', 0) or 0)
@@ -265,15 +232,15 @@ def portfolio_to_string(portfolio_json: Dict[str, Any], symbol: str = None) -> s
 
     total_return_pct = (100.0 * (total_asset - initial_cash) / initial_cash) if initial_cash > 0 else 0.0
 
-    result_string += f"Current Total Return (percent): {_fmt_number(total_return_pct, 2)}%\n"
-    result_string += f"Available Cash: {_fmt_number(available_cash, 2)}\n"
-    result_string += f"Current Account Value: {_fmt_number(total_asset, 2)}\n"
-    result_string += f"Total Unrealized PnL: {_fmt_number(total_pnl, 2)}\n"
-    result_string += "Current live positions & performance:\n\n"
+    result_string += f"当前总收益率: {_fmt_number(total_return_pct, 2)}%\n"
+    result_string += f"可用现金: {_fmt_number(available_cash, 2)}\n"
+    result_string += f"账户总值: {_fmt_number(total_asset, 2)}\n"
+    result_string += f"总浮动盈亏: {_fmt_number(total_pnl, 2)}\n"
+    result_string += "当前持仓详情:\n\n"
 
     positions = portfolio_json.get('positions', []) or []
     if not positions:
-        result_string += "(No open positions)\n"
+        result_string += "(当前无持仓)\n"
         return result_string
 
     for pos in positions:
@@ -286,19 +253,20 @@ def portfolio_to_string(portfolio_json: Dict[str, Any], symbol: str = None) -> s
         notional = float(pos.get('notional_usd', 0) or 0)
         risk_usd = float(pos.get('risk_usd', 0) or 0)
         confidence = pos.get('confidence', None)
+        
+        # Calculate individual return percentage
+        ret_pct = 0.0
+        if entry > 0:
+            ret_pct = (current - entry) / entry * 100.0
 
         line = (
-            f"Symbol: {sym}, "
-            f"Qty(shares): {_fmt_number(qty, 4)}, "
-            f"Entry: {_fmt_number(entry, 2)}, "
-            f"Current: {_fmt_number(current, 2)}, "
-            f"PnL: {_fmt_number(pnl, 2)}, "
-            f"Notional: {_fmt_number(notional, 2)}, "
-            f"Risk: {_fmt_number(risk_usd, 2)}, "
-            f"Leverage: {lev}x"
+            f"代码: {sym}, "
+            f"持仓(手): {_fmt_number(qty / 100.0, 2)} ({_fmt_number(qty, 0)}股), "
+            f"成本价: {_fmt_number(entry, 2)}, "
+            f"当前价: {_fmt_number(current, 2)}, "
+            f"浮盈: {_fmt_number(pnl, 2)} ({_fmt_number(ret_pct, 2)}%), "
+            f"市值: {_fmt_number(notional, 2)}"
         )
-        if confidence is not None:
-            line += f", Confidence: {_fmt_number(float(confidence), 2)}"
         result_string += line + "\n"
 
     return result_string
@@ -334,7 +302,13 @@ def market_data_to_string_for_symbol(market_data: Dict[str, Any], symbol: str) -
     interval_desc = freq_map.get(frequency, frequency)
 
     price = intraday.get('current_price')
+    ema10 = intraday.get('current_ema10')
     ema20 = intraday.get('current_close_20_ema')
+    ma5 = intraday.get('current_ma5')
+    ma10 = intraday.get('current_ma10')
+    ma20 = intraday.get('current_ma20')
+    ma60 = intraday.get('current_ma60')
+    
     # 对齐数据源：优先使用 stk_factor 提供的 MACD/RSI
     macd_dif = intraday.get('factor_macd_dif', intraday.get('current_macd_dif') or intraday.get('current_macd'))
     macd_dea = intraday.get('factor_macd_dea', intraday.get('current_macd_dea'))
@@ -363,8 +337,11 @@ def market_data_to_string_for_symbol(market_data: Dict[str, Any], symbol: str) -
     rsi_24_str = _fmt_series(rsi24_series, 3)
     recent_10_vals = intraday.get('recent_10_closes') or []
     recent_30_vals = intraday.get('recent_30_closes') or []
+    recent_vol_vals = intraday.get('recent_vol') or []
     recent_10_str = _fmt_series(recent_10_vals, 2)
     recent_30_str = _fmt_series(recent_30_vals, 2)
+    recent_vol_str = _fmt_series(recent_vol_vals, 0)
+    
     # 近30日特征：斜率与波动率（简单特征，便于模型参考）
     slope_30_pct = None
     vol_30_pct = None
@@ -412,13 +389,16 @@ def market_data_to_string_for_symbol(market_data: Dict[str, Any], symbol: str) -
 
     lines = [
         f"ALL {symbol_upper} DATA",
-        f"current_price = {_fmt_number(price, 3)}, current_ema20 = {_fmt_number(ema20, 3)}, current_macd_dif = {_fmt_number(macd_dif, 3)}, current_macd_dea = {_fmt_number(macd_dea, 3)}, current_macd_hist = {_fmt_number(macd_hist, 3)}",
+        f"current_price = {_fmt_number(price, 3)}",
+        f"Moving Averages: MA5={_fmt_number(ma5, 2)}, MA10={_fmt_number(ma10, 2)}, EMA10={_fmt_number(ema10, 2)}, MA20={_fmt_number(ma20, 2)}, EMA20={_fmt_number(ema20, 2)}, MA60={_fmt_number(ma60, 2)}",
+        f"current_macd_dif = {_fmt_number(macd_dif, 3)}, current_macd_dea = {_fmt_number(macd_dea, 3)}, current_macd_hist = {_fmt_number(macd_hist, 3)}",
         f"RSI(6/12/24) current = {_fmt_number(rsi6, 3)} / {_fmt_number(rsi12, 3)} / {_fmt_number(rsi24, 3)}",
         f"Open Interest: Latest: {_fmt_number(oi_latest, 2)}  Average: {_fmt_number(oi_avg, 2)}",
         f"Funding Rate: {_fmt_number(funding, 6)}",
         f"Intraday series ({interval_desc} intervals, oldest → latest):",
         f"{symbol_upper} mid prices (daily closes): [{mid_prices_str}]",
         (f"{symbol_upper} recent 30 closes: [{recent_30_str}]" if recent_30_str else ""),
+        (f"{symbol_upper} recent 30 volume: [{recent_vol_str}]" if recent_vol_str else ""),
         (f"recent_30 features: slope={_fmt_number(slope_30_pct, 2)}% | vol={_fmt_number(vol_30_pct, 2)}%" if (slope_30_pct is not None or vol_30_pct is not None) else ""),
         (f"{symbol_upper} recent 10 closes: [{recent_10_str}]" if recent_10_str else ""),
         f"EMA indicators (20‑period): [{ema_20_str}]",
@@ -449,6 +429,7 @@ def market_data_to_string_for_symbol(market_data: Dict[str, Any], symbol: str) -
         ("boll_mid", market_data.get('factor_boll_mid')),
         ("boll_lower", market_data.get('factor_boll_lower')),
         ("cci", market_data.get('factor_cci')),
+        ("pct_change", market_data.get('factor_pct_change')),
     ]
     if any(v is not None for _, v in factor_pairs):
         lines.append("Provided factor indicators (stk_factor current values):")
@@ -461,33 +442,137 @@ def market_data_to_string_for_symbol(market_data: Dict[str, Any], symbol: str) -
 
 def _safe_json_parse(text: str) -> Dict[str, Any]:
     """
-    尝试从模型输出中提取 JSON 对象：
-    - 先直接 json.loads
-    - 失败则查找首个 '{' 到最后一个 '}' 的片段再解析
-    - 若仍失败，返回空字典，保证调用方健壮性
+    Ultra-robust JSON parser for LLM outputs.
+    Handles standard JSON (double quotes), Python dicts (single quotes), 
+    and noisy text (markdown blocks, extra words).
     """
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    try:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidate = text[start:end+1]
-            return json.loads(candidate)
-        return {}
-    except Exception:
+    if not text:
         return {}
 
+    import json
+    import ast
+    import re
+
+    # Helper: Try parsing a string with multiple methods
+    def try_parse(candidate: str) -> Dict[str, Any]:
+        # 1. Standard JSON
+        try:
+            return json.loads(candidate)
+        except:
+            pass
+        
+        # 2. Python Literal (Single quotes)
+        try:
+            return ast.literal_eval(candidate)
+        except:
+            pass
+            
+        # 3. Relaxed fix: Replace single quotes with double quotes (risky but sometimes works)
+        try:
+            return json.loads(candidate.replace("'", '"'))
+        except:
+            pass
+            
+        return None
+
+    # 1. Direct parse attempt
+    res = try_parse(text)
+    if res is not None and isinstance(res, dict):
+        return res
+
+    # 2. Extract JSON block using Regex (Find largest {...} block)
+    # Matches { ... } including nested braces (up to a reasonable depth or simple nesting)
+    # Simple greedy match from first { to last }
+    match = re.search(r'(\{.*\})', text, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        res = try_parse(candidate)
+        if res is not None and isinstance(res, dict):
+            return res
+
+    # 3. Markdown block fallback
+    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        res = try_parse(candidate)
+        if res is not None and isinstance(res, dict):
+            return res
+
+    return {}
+
+
+def analyze_market_features(market_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Python 负责算数：计算复杂的布尔逻辑，减轻 LLM 的计算负担。
+    生成可读的趋势、突破、动能信号。
+    """
+    price = market_data.get('current_price')
+    ema10 = market_data.get('current_ema10')
+    ema20 = market_data.get('current_close_20_ema')
+    ema60 = market_data.get('current_ema60')
+    
+    macd_hist = market_data.get('factor_macd') or 0
+    macd_slope = market_data.get('macd_hist_slope') or 0
+    
+    # 优先使用 stk_factor 的指标
+    rsi6 = market_data.get('factor_rsi_6')
+    boll_upper = market_data.get('factor_boll_upper') or market_data.get('current_boll_upper')
+
+    features = {
+        "trend_label": "Unknown",
+        "is_super_trend": False,
+        "is_breakout": False,
+        "momentum_status": "Neutral",
+        "risk_warning": "None"
+    }
+
+    # 1. 判定趋势状态 (Super Trend)
+    # 逻辑：价格 > EMA10 > EMA20，且 MACD > 0，且 RSI 强势 (>60)
+    if price and ema10 and ema20:
+        if price > ema10 and ema10 > ema20:
+            if macd_hist > 0:
+                features["is_super_trend"] = True
+                features["trend_label"] = "Super Bullish (Strong Uptrend)"
+            else:
+                features["trend_label"] = "Bullish (Retracement/Weak)"
+        elif price < ema20:
+            if ema60 and price < ema60:
+                features["trend_label"] = "Bearish (Downtrend)"
+            else:
+                features["trend_label"] = "Bearish (Short term)"
+        else:
+            features["trend_label"] = "Bullish (Normal)"
+    
+    # 2. 判定突破 (Breakout) - 解决张江高科踏空的关键
+    # 逻辑：价格 > 布林上轨，且 MACD 在加速扩张 (Slope > 0)
+    if price and boll_upper and price >= boll_upper * 0.995: # 接近或突破
+        features["is_breakout"] = True
+
+    # 3. 判定动能
+    if macd_slope > 0 and macd_hist > 0:
+        features["momentum_status"] = "Expanding (Strong Buy Force)"
+    elif macd_slope < 0 and macd_hist > 0:
+        features["momentum_status"] = "Fading (Bullish Divergence Risk)"
+    elif macd_slope < 0 and macd_hist < 0:
+        features["momentum_status"] = "Accelerating Down (Strong Sell Force)"
+    elif macd_slope > 0 and macd_hist < 0:
+        features["momentum_status"] = "Recovering (Possible Reversal)"
+
+    # 4. 风险提示
+    if rsi6 and rsi6 > 85 and not features["is_super_trend"]:
+        features["risk_warning"] = "EXTREME OVERBOUGHT (RSI>85). Risk of pullback."
+    elif rsi6 and rsi6 < 20:
+        features["risk_warning"] = "EXTREME OVERSOLD. Watch for bounce."
+        
+    return features
 
 def build_market_prompt(symbol: str, market_data: Dict[str, Any], portfolio_json: Dict[str, Any]) -> str:
     md_str = market_data_to_string_for_symbol(market_data, symbol)
     pf_str = portfolio_to_string(portfolio_json, symbol)
-    ta_text = market_data.get('technical_analysis')
-
-    # 可选：由上层回测注入的“可执行状态”与交易规则
+    
+    # ... State extraction ...
     state = market_data.get('llm_state') or {}
+    # ... (Keep logic) ...
     has_position = bool(state.get('has_position', False))
     is_first_trade = bool(state.get('is_first_trade', False))
     last_action = str(state.get('last_action', 'none'))
@@ -504,77 +589,38 @@ def build_market_prompt(symbol: str, market_data: Dict[str, Any], portfolio_json
     recent_actions_text = state.get('recent_actions_text', None)
 
     rules_block = (
-        f"A股制度与状态（请严格遵守）：\n"
-        f"- 仅允许开多，不允许开空；卖出仅指减仓（signal='sell'）或平仓（signal='close'），不构成做空。\n"
-        f"- T+1：当日买入的股票次一交易日才可卖出；今日可卖出：{tplus1_sell_available}.\n"
-        f"- 最小交易单位：1手={lot_size}股；买入数量以‘手数’表达，且不得低于{min_lot_count}手（默认=1手）。\n"
-        f"- 账户状态：has_position={has_position}, is_first_trade={is_first_trade}, last_action={last_action}.\n"
-        f"- 单票可用现金上限：{available_cash}；当前价格：{current_price}；最多可买手数（含买入费用）：{max_buyable_lots}；最多可卖手数：{max_sellable_lots}.\n"
-        f"- 今日允许动作集合：{allowed_actions}（仅从该集合中选择一个动作）。\n"
-        f"\n风险与仓位指导（统一映射与上限）：\n"
-        f"- 基线仓位：默认仓位比例 default_position_fraction={default_position_fraction}；建议手数≈floor(max_buyable_lots * default_position_fraction)。\n"
-        f"- 置信度映射（统一）：confidence≥0.75→≈50%；~0.5→≈25%；≤0.4→HOLD/≤1手。\n"
-        f"- **弱势限仓**：仅当 Price < EMA20（趋势破坏）时，单票持仓上限≤总容量 15%（且至少保留1手）。\n"
-        f"- **动能减弱**：若 Price > EMA20 但 MACD < 0，不强制限仓，但禁止主动加仓（Stop Buying）。\n"
-        f"- 严禁一次性用尽全部可用现金，遵守手数与现金约束。\n"
-        f"- 当前持仓均价（若有）：{_fmt_number(avg_entry_price, 2)}。\n"
-        f"- 统一失效条件建议：若设置了 stop_loss，则 invalidation_condition='close below stop_loss'；否则采用 'close below EMA20 for 2 consecutive days' 并与减仓联动。\n"
-        f"\n解析约束（禁止猜测与原始序列解析）：\n"
-        f"- 严禁解析 recent_30_closes / recent_10_closes / factor_series_* 数组来推断'上升/创新低'；仅使用已提供的显式字段。\n"
-        f"- 若数据不足或存在不一致，请选择 HOLD，并 quantity=0。\n"
-        f"\n外部技术分析引用与使用（可选）：\n"
-        f"- 外部技术分析文本可用于方向性总结与审计说明，不得单独触发交易。\n"
-        f"- 在 Reasoning 开头简要总结其方向性结论（如趋势/支撑/阻力）；若与量化门槛冲突，以量化约束优先并说明取舍理由。\n"
-        f"\n输出约束：\n"
-        f"- 严禁使用任何未提供的未来或外部信息，不得参考训练知识库或新闻。\n"
-        f"- 仅输出一个 JSON 对象，键为 trade_signal_args，结构如下：\n"
-        f"  trade_signal_args = {{\n"
-        f"    'symbol': '{symbol}',\n"
-        f"    'signal': one of {allowed_actions},  # 'sell' 为部分减仓，'close' 为全平\n"
-        f"    'quantity': INT lots,  # 若 signal=='buy'，1 <= quantity <= {max_buyable_lots}; 若 signal in ['sell','close']，{('1 <= quantity <= ' + str(max_sellable_lots)) if ('sell' in allowed_actions or 'close' in allowed_actions) else '不可用（今日不可卖出）'}；若 signal=='hold'，quantity=0\n"
-        f"    'entry_price': float（可省略；省略时默认使用当前价）,\n"
-        f"    'leverage': 1.0,\n"
-        f"    'confidence': 0.0~1.0,\n"
-        f"    'invalidation_condition': string（建议使用统一失效条件；若 signal=='hold'，请省略该字段及所有可选风险字段）\n"
-        f"    'profit_target': optional float,\n"
-        f"    'stop_loss': optional float,\n"
-        f"    'stop_loss_pct': optional float（建议5%）,\n"
-        f"    'tp_trailing_pct': optional float（建议3%）\n"
-        f"  }}\n"
-        f"- 若不确定或不在允许动作集合内，请输出 hold 并 quantity=0。\n"
-        )
+        f"【A股交易规则与账户状态】（请严格遵守）：\n"
+        f"- **方向**：仅允许做多（Long only）。卖出指平仓。\n"
+        f"- **T+1 状态**：{'今日可卖' if tplus1_sell_available else '今日冻结(T+1限制)'}。\n"
+        f"- **单位**：1手 = {lot_size}股。买卖必须是整数手。\n"
+        f"- **账户**：持仓状态={has_position}, 资金={available_cash}。\n"
+        f"- **今日允许动作**：{allowed_actions}。\n"
+    )
     recent_block = ""
     if recent_actions_text:
-        recent_block = f"\nRECENT EXECUTIONS (last actions):\n{recent_actions_text}\n"
+        recent_block = f"\n【最近交易记录】:\n{recent_actions_text}\n"
 
-    corrections_block = (
-        "策略修正摘要（需严格遵守）：\n"
-        "- 超级趋势豁免 (Super Trend)：若 `is_super_trend`=True，禁止任何止盈/减仓，除非 RSI(6) > 90 或收盘价跌破 EMA10。允许在趋势中无视超买。\n"
-        "- 浮盈加仓 (Pyramiding)：若当前持仓浮盈 > 5% 且 `is_momentum_buy`=True，允许加仓至 40%-50% 总仓位。\n"
-        "- 冷却解除 (Cooldown Release)：若 `is_in_buy_cooldown`=True 但 `is_cooldown_release_met`=True (回踩EMA20或超卖)，允许立即买入，无视冷却。\n"
-        "- 左侧抄底：熊市陷阱/超卖区域买入时，基础仓位 1-5 手。\n"
-        "- 下跌风控与止损豁免：\n"
-        "  1. 正常止损：若价格 < EMA20 且 跌幅 > 3%（有效破位），且 RSI(6) > 40（未超卖），应减仓/清仓。\n"
-        "  2. 超卖豁免：若 RSI(6) < 40（进入超卖区），即使跌破 EMA20，也禁止杀跌，应持有或补仓（Bear Trap）。\n"
+    # === 新增：计算高级特征并生成“胆量包”指令 ===
+    feats = analyze_market_features(market_data)
+    
+    quant_signal_block = (
+        f"\n【高级量化信号参考 (Python Calculated)】\n"
+        f"- 趋势状态 (Trend Status): {feats['trend_label']}\n"
+        f"- 动能状态 (Momentum): {feats['momentum_status']}\n"
+        f"- 关键信号 (Key Signals):\n"
+        f"  * SUPER TREND: {'YES' if feats['is_super_trend'] else 'NO'} "
+        f"(若 YES: 忽略 RSI 超买，坚决持有。若无仓位，可追涨。)\n"
+        f"  * BREAKOUT: {'YES' if feats['is_breakout'] else 'NO'} "
+        f"(若 YES: 忽略 RSI 高位，这是强力突破信号。)\n"
+        f"- 风险提示: {feats['risk_warning']}\n"
+        f"\n【战术执行指南 (ACTION GUIDE)】\n"
+        f"1. 如果 `BREAKOUT` 为 YES 且无持仓：**立即买入 (BUY NOW)**。不要等待回调 (Do NOT wait for dip)。不要害怕 RSI > 80。\n"
+        f"2. 如果 `SUPER TREND` 为 YES：持有为主。若想加仓，可等待小幅回调或直接突破买入。\n"
     )
 
-    ta_block = f"\nEXTERNAL TECHNICAL ANALYSIS (workflow):\n{ta_text}\n" if ta_text else ""
-    # 预计算策略标志并嵌入提示，简化 LLM 的解析任务
-    strategy_flags = compute_strategy_flags(market_data)
-    flags_block = (
-        "\nSTRATEGY FLAGS (Python Calculated):\n"
-        f"{json.dumps(strategy_flags, ensure_ascii=False)}\n"
-        "INTERPRETATION GUIDE:\n"
-        "- is_super_trend=True: The stock is FLYING. DO NOT SELL. Consider adding.\n"
-        "- is_momentum_buy=True: Momentum is strong, good for trend entry.\n"
-        "- is_extreme_overbought=True: Danger zone (RSI>85). Take profits.\n"
-        "- bull_trap_disabled=True: REAL BREAKOUT DETECTED (High Vol + Big Candle). DO NOT SELL even if TA says Bullish.\n"
-        "- bear_trap_disabled=True: MARKET CRASH DETECTED (Big Drop). DO NOT BUY even if TA says Bearish.\n"
-        "- external_ta_sentiment: [IMPORTANT] Use this to detect Crowd Sentiment as per System Prompt.\n"
-    )
-    return f'''\n        {ta_block}DATA FOR {symbol} (daily, recent 30 trading days):\n        {md_str}\n\n        PORTFOLIO SNAPSHOT:\n        {pf_str}\n{recent_block}\n        BACKTEST STATE & RULES:\n        {rules_block}\n{flags_block}\n        STRATEGY CORRECTIONS:\n        {corrections_block}\n        '''
+    return f'''\n        {md_str}\n{quant_signal_block}\n        {pf_str}\n{recent_block}\n        {rules_block}\n        '''
 
-def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfolio_json: Dict[str, Any], model_name: str = None) -> Dict[str, Any]:
+def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfolio_json: Dict[str, Any], model_name: str = None, strategy_prompt: str = None) -> Dict[str, Any]:
     """
     根据市场数据与组合信息生成各标的的交易决策。
     返回：字典，key 为 symbol，value 为模型返回的对象（包含 trade_signal_args 与 reasoning）。
@@ -584,8 +630,29 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
     decisions: Dict[str, Any] = {}
     # 选择模型：入参优先，其次环境变量，默认 deepseek-chat
     selected_model = (model_name or LLM_MODEL_ENV or "deepseek-chat").strip()
-    for symbol, market_data in (market_data_dict or {}).items():
+    
+    # Determine System Prompt
+    if strategy_prompt and strategy_prompt.strip():
+        # Inject custom strategy but append JSON format rules to ensure stability
+        SYSTEM_PROMPT = strategy_prompt + "\n" + JSON_FORMAT_INSTRUCTIONS
+    else:
         SYSTEM_PROMPT = SYSTEM_PROMPT_TEXT
+
+    for symbol, market_data in (market_data_dict or {}).items():
+        # Extract state safely from market_data
+        try:
+            llm_state = market_data.get('llm_state') or {}
+        except Exception:
+            llm_state = {}
+        
+        tplus1_sell_available = bool(llm_state.get('tplus1_sell_available_today', False))
+        max_sellable_lots = int(llm_state.get('max_sellable_lots', 0) or 0)
+        # 补充提取 max_buyable_lots，防止后续未定义错误
+        max_buyable_lots = int(llm_state.get('max_buyable_lots', 0) or 0)
+        available_cash = float(llm_state.get('available_cash', 0.0) or 0.0)
+        lot_size = int(llm_state.get('lot_size', 100) or 100)
+        allowed_actions = llm_state.get('allowed_actions', ['buy', 'hold'])
+
         MARKET_PROMPT = build_market_prompt(symbol, market_data, portfolio_json)
         # 直接使用 DeepSeek HTTP API；保持接口与输出不变，并加入模型不可用回退
         url = "https://api.deepseek.com/chat/completions"
@@ -601,20 +668,43 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
             ],
         }
 
-        def _post_once(model: str):
+        def _post_with_retry(model: str, max_retries: int = 3):
             payload["model"] = model
-            resp = requests.post(url, headers=headers, json=payload, timeout=180)
-            if resp.status_code != 200:
-                raise RuntimeError(f"DeepSeek API error {resp.status_code}: {resp.text}")
-            return resp.json()
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=180)
+                    if resp.status_code == 200:
+                        return resp.json()
+                    
+                    # Handle specific errors that might not need retry or need specific handling
+                    # DeepSeek returns 400 for invalid model
+                    err_text = resp.text
+                    if resp.status_code == 400 and ("Model Not Exist" in err_text or "model_not_found" in err_text or "invalid_request_error" in err_text):
+                         raise ValueError("Model Not Exist") # Signal to switch model
+
+                    print(f"[DeepSeek] Error {resp.status_code}: {err_text[:100]}..., retrying ({attempt + 1}/{max_retries})...")
+                    last_error = RuntimeError(f"DeepSeek API error {resp.status_code}: {resp.text}")
+                
+                except requests.RequestException as e:
+                    print(f"[DeepSeek] Network error: {e}, retrying ({attempt + 1}/{max_retries})...")
+                    last_error = e
+                except ValueError as e:
+                    raise e # Re-raise model error immediately
+                
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1)) # Exponential backoff: 2, 4, 6s
+            
+            raise last_error or RuntimeError(f"DeepSeek API failed after {max_retries} retries.")
 
         try:
-            data = _post_once(selected_model)
-        except Exception as e:
-            msg = str(e)
-            if ("Model Not Exist" in msg or "model_not_found" in msg or "invalid_request_error" in msg) and selected_model != "deepseek-chat":
+            data = _post_with_retry(selected_model)
+        except ValueError:
+            # Fallback for model not found
+            if selected_model != "deepseek-chat":
+                print(f"[DeepSeek] Model {selected_model} not found, falling back to deepseek-chat")
                 selected_model = "deepseek-chat"
-                data = _post_once(selected_model)
+                data = _post_with_retry(selected_model)
             else:
                 raise
 
@@ -640,7 +730,6 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                     entry_price = result.get("entry_price")
                     if entry_price is None:
                         # 兜底：使用当前价
-                        # 从 market_data_dict 当前 symbol 的市场数据取 current_price
                         md = market_data
                         entry_price = md.get("current_price")
                     lev = float(result.get("leverage", 1.0) or 1.0)
@@ -659,7 +748,7 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                         "stop_loss": sl,
                     }
                     result = {"trade_signal_args": args}
-                    print("[WARN] 模型输出未包含 trade_signal_args，已按扁平 JSON 自动兼容包裹。")
+                    print("[WARN] 模型输出未包含 trade_signal_args，已按扁平 JSON 自动兼容包裹。\n")
                 except Exception:
                     args = None
             if not isinstance(args, dict):
@@ -676,29 +765,11 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                     "stop_loss": None,
                 }
                 result = {"trade_signal_args": fallback_args}
-                print("[WARN] 模型输出无法解析为有效 JSON，使用安全兜底：hold。")
+                print("[WARN] 模型输出无法解析为有效 JSON，使用安全兜底：hold。\n")
 
         # 统一规范化与约束检查：确保信号与手数可执行、键完整
         if isinstance(args, dict):
-            try:
-                state = (market_data_dict.get(symbol) or {}).get('llm_state') or {}
-            except Exception:
-                state = {}
-            allowed_actions = state.get('allowed_actions', ['buy', 'hold'])
-            lot_size = int(state.get('lot_size', 100) or 100)
-            max_buyable_lots = int(state.get('max_buyable_lots', 0) or 0)
-            max_sellable_lots = int(state.get('max_sellable_lots', 0) or 0)
-            tplus1_sell_available = bool(state.get('tplus1_sell_available_today', False))
-            # 进攻型基线与最小手数（可由上游在 llm_state 中配置）
-            try:
-                min_lot_count = int(state.get('min_lot_count', 1) or 1)
-            except Exception:
-                min_lot_count = 1
-            try:
-                default_position_fraction = float(state.get('default_position_fraction', 0.25) or 0.25)
-            except Exception:
-                default_position_fraction = 0.25
-
+            
             # 信号与手数规范化
             sig = str(args.get('signal', args.get('action', 'hold')) or 'hold').lower().strip()
             if sig in ('long', 'buy_open', 'open_long'):
@@ -711,243 +782,72 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
             # 若信号不在允许集合，直接改为 hold
             if sig not in allowed_actions:
                 sig = 'hold'
+            
             qty_lots = int(float(args.get('quantity', 0) or 0))
+            
+            # Entry Price Handling (Default to current price if missing)
+            entry_price = args.get('entry_price')
+            if entry_price is None:
+                try:
+                    entry_price = float((market_data.get('current_price') or 0))
+                except Exception:
+                    entry_price = 0.0
+            entry_price = float(entry_price or 0)
+
+            # Default rates (Standard A-share rates)
+            commission_rate = 0.0003
+            transfer_fee_rate = 0.00001
+            is_shanghai = str(symbol).startswith('6')
+
+            # --- 核心风控与 A 股规则 (Hard Rules Only) ---
+            # 移除所有 Python 侧的策略干预 (Technical checks, Cooldowns, Caps)
+            # 仅保留资金、持仓、T+1 限制
+
             if sig == 'buy':
                 try:
                     md_local = (market_data_dict.get(symbol) or {})
-                    flags_local = compute_strategy_flags(md_local)
+                    # 仅保留基础冷却检查作为熔断器
                     in_cooldown = bool(md_local.get('buy_cooldown', False))
-                    release_met = bool(flags_local.get('is_cooldown_release_met', False))
-                    if in_cooldown and not release_met:
-                        sig = 'hold'
-                        qty_lots = 0
-                except Exception:
+                    # 如果在冷却期，但 LLM 仍坚持买入，我们选择放行（假设它看到了 Breakout）
+                    # 除非你需要强制冷却，否则这里不做拦截
                     pass
-                # 策略门槛硬性校验：仅当至少一个 BUY 触发成立时允许买入
-                try:
-                    md_local = (market_data_dict.get(symbol) or {})
-                    flags = compute_strategy_flags(md_local)
-                except Exception:
-                    flags = {}
-                is_trend_buy_strict = bool(flags.get('is_trend_buy_strict'))
-                is_exploratory_buy = bool(flags.get('is_exploratory_buy'))
-                is_mean_reversion_buy = bool(flags.get('is_mean_reversion_buy'))
-                is_momentum_buy = bool(flags.get('is_momentum_buy'))
-                is_super_trend = bool(flags.get('is_super_trend'))
-                bear_trap_disabled = bool(flags.get('bear_trap_disabled'))
-                is_cooldown_release_met = bool(flags.get('is_cooldown_release_met'))
-                try:
-                    ai_conf = float(args.get('confidence', 0.0) or 0.0)
-                except Exception:
-                    ai_conf = 0.0
-                has_technical_support = (is_trend_buy_strict or is_exploratory_buy or is_mean_reversion_buy or is_momentum_buy or is_super_trend or is_cooldown_release_met)
-                if (not has_technical_support) and (ai_conf < 0.8):
-                    sig = 'hold'
-                    qty_lots = 0
-
-                # 提升至激进基线（不低于 min_lot_count）
-                try:
-                    baseline_lots = max(min_lot_count, int(math.floor(max_buyable_lots * default_position_fraction)))
-                except Exception:
-                    baseline_lots = min_lot_count
-                if max_buyable_lots > 0 and qty_lots < baseline_lots:
-                    qty_lots = min(max_buyable_lots, baseline_lots)
-
-                # 探索BUY限制：若仅为探索BUY，强制手数≤min_lot_count
-                try:
-                    if (not is_trend_buy_strict) and is_exploratory_buy:
-                        qty_lots = min(qty_lots, min_lot_count)
-                except Exception:
-                    pass
-                try:
-                    state = md_local.get('llm_state') or {}
-                    avg_price = state.get('avg_entry_price')
-                    curr_price = state.get('current_price')
-                    if avg_price and curr_price and float(avg_price) > 0:
-                        profit_pct = (float(curr_price) - float(avg_price)) / float(avg_price)
-                        if profit_pct > 0.05 and is_momentum_buy:
-                            target_lots = int(max_buyable_lots * 0.5)
-                            qty_lots = max(qty_lots, target_lots)
                 except Exception:
                     pass
 
-                # 防追高：上轨扩张、EMA20偏离、当日大涨
-                try:
-                    md_local = (market_data_dict.get(symbol) or {})
-                    flags_local = compute_strategy_flags(md_local)
-                    is_super_trend_local = bool(flags_local.get('is_super_trend'))
-                    is_momentum_buy_local = bool(flags_local.get('is_momentum_buy'))
-                    bear_trap_disabled_local = bool(flags_local.get('bear_trap_disabled'))
-                    current_price = md_local.get('current_price')
-                    intraday_local = md_local.get('intraday') or {}
-                    ema20_val = intraday_local.get('factor_ema_20') or intraday_local.get('ema20') or md_local.get('ema20')
-                    boll_upper_val = intraday_local.get('factor_boll_upper')
-                    today_change_pct = md_local.get('today_change_pct', 0.0)
-                    state_local = md_local.get('llm_state') or {}
-                    has_position_local = bool(state_local.get('has_position', False))
-                    price_f = float(current_price) if current_price is not None else None
-                    ema20_f = float(ema20_val) if ema20_val is not None else None
-                    boll_upper_f = float(boll_upper_val) if boll_upper_val is not None else None
-                    ratio = (price_f / ema20_f) if (price_f is not None and ema20_f and ema20_f > 0) else None
-                    is_expansion = False
-                    if boll_upper_f is not None and price_f is not None and price_f >= boll_upper_f:
-                        is_expansion = True
-                    if ratio is not None and ratio >= 1.01:
-                        is_expansion = True
-                    try:
-                        day_pct_f = float(today_change_pct or 0.0)
-                        if day_pct_f >= 0.03:
-                            is_expansion = True
-                    except Exception:
-                        pass
-                    if is_expansion and (not (is_super_trend_local or is_momentum_buy_local)):
-                        qty_lots = min(qty_lots, min_lot_count)
-                    if has_position_local and (ratio is not None) and (ratio > 1.01) and (not (is_super_trend_local or is_momentum_buy_local)):
-                        qty_lots = min(qty_lots, min_lot_count)
-                    if bear_trap_disabled_local:
-                        sig = 'hold'
-                        qty_lots = 0
-                except Exception:
-                    pass
-
-                # [修改] 下跌阶段上限：总容量的 15%（且至少 1 手）；冷却释放豁免
-                try:
-                    flags_down = bool(flags.get('is_in_downtrend_cap'))
-                    is_release = bool(flags.get('is_cooldown_release_met', False))
-                except Exception:
-                    flags_down = False
-                    is_release = False
-                if flags_down and not is_release:
-                    try:
-                        current_hold_lots = int(max_sellable_lots)
-                        total_capacity_lots = current_hold_lots + int(max_buyable_lots)
-                        limit_lots = max(1, int(total_capacity_lots * 0.15))
-                        cap_remaining = max(0, limit_lots - current_hold_lots)
-                        if qty_lots > cap_remaining:
-                            qty_lots = cap_remaining
-                        if qty_lots <= 0:
-                            sig = 'hold'
-                            qty_lots = 0
-                    except Exception:
-                        pass
-
-                try:
-                    extreme_overbought = bool(flags.get('is_extreme_overbought'))
-                except Exception:
-                    extreme_overbought = False
-                if extreme_overbought:
-                    sig = 'hold'
-                    qty_lots = 0
-
+                # === 移除所有基于旧 flags 的硬性拦截 ===
+                # 我们现在完全信任 LLM 基于 analyze_market_features 生成的决策。
+                
+                # 资金上限约束 (Financial Constraint) - 必须保留
                 if max_buyable_lots >= 0 and qty_lots > max_buyable_lots:
                     qty_lots = max_buyable_lots
 
+                # 最小手数约束
                 if qty_lots < 1:
                     qty_lots = 0
-                    sig = 'hold'
+                    sig = 'hold'            
             elif sig in ('sell', 'close'):
+                # T+1 与持仓约束
                 if not tplus1_sell_available:
                     sig = 'hold'
                     qty_lots = 0
                 else:
                     if sig == 'close':
-                        # close：用全部可卖手数表达
                         qty_lots = max_sellable_lots
                     else:
-                        # sell：部分减仓
+                        if qty_lots > max_sellable_lots:
+                            qty_lots = max_sellable_lots
                         if qty_lots < 1:
                             sig = 'hold'
                             qty_lots = 0
-                        elif max_sellable_lots >= 0 and qty_lots > max_sellable_lots:
-                            qty_lots = max_sellable_lots
-                        try:
-                            md_local = (market_data_dict.get(symbol) or {})
-                            flags = compute_strategy_flags(md_local)
-                            is_super_trend_local = bool(flags.get('is_super_trend'))
-                            overbought_flag = bool(flags.get('is_overbought_sell'))
-                            extreme_overbought = bool(flags.get('is_extreme_overbought'))
-                            bull_trap_disabled = bool(flags.get('bull_trap_disabled'))
-                            bear_trap_disabled = bool(flags.get('bear_trap_disabled'))
-                            rsi6_val = md_local.get('factor_rsi_6')
-                            state_local = md_local.get('llm_state') or {}
-                            avg_price = state_local.get('avg_entry_price')
-                            curr_price = state_local.get('current_price')
-                            huge_loss = False
-                            try:
-                                if avg_price and curr_price and float(avg_price) > 0:
-                                    loss_pct = (float(avg_price) - float(curr_price)) / float(avg_price)
-                                    huge_loss = (loss_pct >= 0.15)
-                            except Exception:
-                                huge_loss = False
-                            force_sell = False
-                            try:
-                                today_pct = md_local.get('today_change_pct')
-                                if today_pct is None:
-                                    pct_factor = md_local.get('factor_pct_change')
-                                    if pct_factor is not None:
-                                        today_pct = float(pct_factor) / 100.0
-                                if (today_pct is not None) and (float(today_pct) < -0.07):
-                                    force_sell = True
-                                    sig = 'sell'
-                                    current_hold = int(max_sellable_lots)
-                                    if is_super_trend_local:
-                                        print(f"[Risk] {symbol} 暴跌 >7% 但处于超级趋势，执行 50% 减仓防守。")
-                                        qty_lots = max(1, int(current_hold * 0.5))
-                                    else:
-                                        print(f"[Risk] {symbol} 弱势暴跌 >7%，判定为破位，执行强平。")
-                                        qty_lots = current_hold
-                            except Exception:
-                                force_sell = False
-                            if (rsi6_val is not None) and (float(rsi6_val) < 40.0) and (not bear_trap_disabled) and (not huge_loss) and (not force_sell):
-                                sig = 'hold'
-                                qty_lots = 0
-                            if is_super_trend_local:
-                                try:
-                                    if force_sell or (rsi6_val is not None and float(rsi6_val) > 90.0):
-                                        pass
-                                    else:
-                                        sig = 'hold'
-                                        qty_lots = 0
-                                except Exception:
-                                    sig = 'hold'
-                                    qty_lots = 0
-                            else:
-                                if force_sell:
-                                    pass
-                                elif extreme_overbought and (('close' in allowed_actions) or ('sell' in allowed_actions)):
-                                    target = int(math.ceil(max_sellable_lots * 0.5))
-                                    qty_lots = max(qty_lots, target)
-                                    if 'close' in allowed_actions and qty_lots >= max_sellable_lots:
-                                        sig = 'close'
-                                        qty_lots = max_sellable_lots
-                                elif overbought_flag and (rsi6_val is not None) and (not bull_trap_disabled):
-                                    rsi6_f = float(rsi6_val)
-                                    if rsi6_f >= 80.0 and ('close' in allowed_actions):
-                                        sig = 'close'
-                                        qty_lots = max_sellable_lots
-                                    elif rsi6_f >= 75.0:
-                                        target = int(math.floor(max_sellable_lots * 0.5))
-                                        qty_lots = max(qty_lots, target)
-                                    elif rsi6_f >= 70.0:
-                                        target = int(math.floor(max_sellable_lots * 0.3))
-                                        qty_lots = max(qty_lots, target)
-                        except Exception:
-                            pass
             else:
-                # hold
+                # Hold
+                sig = 'hold'
                 qty_lots = 0
 
-            entry_price = args.get('entry_price')
-            if entry_price is None:
-                # 兜底使用当前价
-                try:
-                    entry_price = (market_data_dict.get(symbol) or {}).get('current_price')
-                except Exception:
-                    entry_price = None
-
+            # Limit Price Logic
             limit_price = args.get('limit_price')
             try:
-                current_p = float((market_data_dict.get(symbol) or {}).get('current_price') or 0)
+                current_p = float((market_data.get('current_price') or 0))
                 is_price_valid = (limit_price is not None and float(limit_price) > 0)
                 if is_price_valid:
                     if current_p > 0 and abs(float(limit_price) - current_p) / current_p > 0.10:
@@ -963,7 +863,7 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
             except Exception:
                 limit_price = None
 
-            # 失效条件兜底：优先 stop_loss，其次 EMA20 连续两日下破建议
+            # Risk Management Fields
             stop_loss = args.get('stop_loss')
             invalidation_condition = args.get('invalidation_condition')
             if not invalidation_condition:
@@ -975,7 +875,6 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                 except Exception:
                     invalidation_condition = "close below EMA20 for 2 consecutive days"
 
-            # 风险估算（以股数计）：风险金额≈|entry-stop|*qty_lots*lot_size
             risk_usd = args.get('risk_usd')
             try:
                 if risk_usd is None and (stop_loss is not None) and (entry_price is not None):
@@ -983,14 +882,13 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
             except Exception:
                 pass
 
-            # 输出字段规范化与精简
+            # Final Output Construction
             allowed_keys = {
                 'symbol', 'signal', 'quantity', 'entry_price', 'limit_price', 'leverage', 'confidence',
                 'invalidation_condition', 'profit_target', 'stop_loss', 'risk_usd',
                 'stop_loss_pct', 'tp_trailing_pct'
             }
 
-            # HOLD：强制精简为可机读的最小集合
             if sig == 'hold':
                 qty_lots = 0
                 args['confidence'] = 0.0
@@ -998,7 +896,6 @@ def trade_decision_provider(market_data_dict: Dict[str, Dict[str, Any]], portfol
                     if k in args:
                         args.pop(k, None)
 
-            # BUY：若缺失风控百分比，填充安全默认值
             if sig == 'buy':
                 if args.get('stop_loss_pct') is None:
                     args['stop_loss_pct'] = 0.05

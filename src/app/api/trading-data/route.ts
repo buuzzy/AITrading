@@ -5,6 +5,7 @@ import path from 'path';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const stock_code = searchParams.get('stock_code');
+  const run_id = searchParams.get('run_id');
 
   if (!stock_code) {
     return NextResponse.json({ error: 'Missing stock_code parameter.' }, { status: 400 });
@@ -16,8 +17,31 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Supabase env missing.' }, { status: 500 });
   }
   try {
-    const tradesEndpoint = `${url}/rest/v1/trades?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
-    const metricsEndpoint = `${url}/rest/v1/daily_metrics?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
+    let targetRunId = run_id;
+
+    if (!targetRunId) {
+      try {
+        const runsRes = await fetch(`${url}/rest/v1/runs?stock_code=eq.${stock_code}&order=created_at.desc&limit=1&select=run_id`, {
+          headers: { apikey: key, Authorization: `Bearer ${key}` },
+          cache: 'no-store'
+        });
+        if (runsRes.ok) {
+          const runsData = await runsRes.json();
+          if (runsData && runsData.length > 0) {
+            targetRunId = runsData[0].run_id;
+          }
+        }
+      } catch (e) { }
+    }
+
+    let tradesEndpoint = `${url}/rest/v1/trades?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
+    let metricsEndpoint = `${url}/rest/v1/daily_metrics?symbol=eq.${encodeURIComponent(stock_code)}&order=date.asc`;
+    
+    if (targetRunId) {
+      tradesEndpoint += `&run_id=eq.${targetRunId}`;
+      metricsEndpoint += `&run_id=eq.${targetRunId}`;
+    }
+
     const [resp, mresp] = await Promise.all([
       fetch(tradesEndpoint, {
         headers: {
@@ -53,91 +77,17 @@ export async function GET(request: Request) {
     }
     let modelName = '';
     try {
-      const p = path.join(process.cwd(), 'specs', 'backtest', String(stock_code), `progress_${String(stock_code)}.json`);
-      const txt = fs.readFileSync(p, 'utf-8');
-      const obj = JSON.parse(txt);
-      if (obj && typeof obj.model_name === 'string') {
-        modelName = obj.model_name;
-      }
+      // Model name is now better fetched from the run config in Supabase, but for now leave empty or minimal.
     } catch {}
 
+    // LLM data is no longer fetched in bulk here. It is fetched on-demand via /api/trade-reasoning.
     let llmByDate: Record<string, any> = {};
-    try {
-      const llmPath = path.join(process.cwd(), 'specs', 'backtest', String(stock_code), `llm_${String(stock_code)}.json`);
-      const llmTxt = fs.readFileSync(llmPath, 'utf-8');
-      const llmObj = JSON.parse(llmTxt);
-      if (llmObj && typeof llmObj === 'object') {
-        llmByDate = llmObj as Record<string, any>;
-      }
-    } catch {}
+
     function stripHtml(s: string) {
       return s.replace(/<[^>]+>/g, "");
     }
-    function normalizeText(s: string) {
-      return s
-        .replace(/[\t ]+/g, " ")
-        .replace(/\r\n/g, "\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-    }
-    function markdownToPlain(s: string) {
-      let text = s;
-      text = text.replace(/```[\s\S]*?```/g, "");
-      text = text.replace(/`([^`]+)`/g, "$1");
-      text = text.replace(/^#{1,6}\s*(.+)$/gm, "\n【$1】\n\n");
-      text = text.replace(/\*\*(.+?)\*\*/g, "【$1】");
-      text = text.replace(/(^|\n)\s*[-*]\s+/g, "$1• ");
-      // 列表块前后分段
-      text = text.replace(/(\n• .+)(\n(• .+))+?/g, (m) => `\n${m}\n\n`);
-      text = text.replace(/\n{3,}/g, "\n\n");
-      text = text.replace(/【{2,}/g, "【");
-      text = text.replace(/】{2,}/g, "】");
-      return text;
-    }
-    function addSentenceBreaks(s: string) {
-      let t = s;
-      // 中文句子分隔
-      t = t.replace(/([。！？])(?![”’）\)])/g, '$1\n');
-      // 英文句子分隔：在句末标点后、下一句以大写字母开头时换行
-      t = t.replace(/([.!?])\s+(?=[A-Z])/g, '$1\n');
-      // 保持项目符号整行
-      t = t.replace(/\n\s*•\s+/g, '\n• ');
-      // 合并多余换行
-      t = t.replace(/\n{3,}/g, '\n\n');
-      return t.trim();
-    }
-    function extractTA(s: string) {
-      let text = stripHtml(s);
-      let start = text.indexOf("EXTERNAL TECHNICAL ANALYSIS");
-      if (start >= 0) {
-        text = text.slice(start);
-        text = text.replace(/^.*EXTERNAL TECHNICAL ANALYSIS[^\n]*\n?/, "");
-      }
-      const stops = [
-        "DATA FOR ",
-        "PORTFOLIO SNAPSHOT",
-        "BACKTEST STATE",
-        "STRATEGY FLAGS",
-        "STRATEGY CORRECTIONS",
-      ];
-      const stopIndexes = stops
-        .map((m) => text.indexOf(m))
-        .filter((i) => i >= 0);
-      if (stopIndexes.length > 0) {
-        const end = Math.min(...stopIndexes);
-        text = text.slice(0, end);
-      }
-      text = markdownToPlain(text);
-      text = addSentenceBreaks(text);
-      return normalizeText(text);
-    }
-
+    
     const data = rows.map(r => {
-      const llm = llmByDate[String(r.date)] || {};
-      const rawReasoning = (llm?.decision?.reasoning ?? llm?.reasoning ?? '') as string;
-      const rawTA = (llm?.market_prompt ?? '') as string;
-      const reasoning = normalizeText(stripHtml(rawReasoning));
-      const technical_analysis = extractTA(rawTA);
       let position_total: number | null = null;
       let profit: number | null = null;
       try {
@@ -172,8 +122,8 @@ export async function GET(request: Request) {
         entry_price: String((r.effective_price ?? r.price) ?? ''),
         confidence: '',
         stop_loss: '',
-        reasoning,
-        technical_analysis,
+        reasoning: '', // Fetched on demand
+        technical_analysis: '', // Fetched on demand
         position_total,
         profit,
       };

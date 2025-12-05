@@ -17,3 +17,5 @@ export const AffiliateRewardAmount = {
   Invited: 0,
   Paied: 5000, // $50
 };
+
+export const SHOWCASE_USER_ID = "59bc86a2-5781-4cb1-88a6-a2e85e361592";
