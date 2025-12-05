@@ -58,7 +58,7 @@ export async function GET(request: Request) {
       });
       fetcher = client.fetch.bind(client);
       // Remove trailing slash from endpoint to avoid double slashes
-      baseUrl = `${r2Endpoint.replace(///$/, '')}/${r2Bucket}`;
+      baseUrl = `${r2Endpoint.replace(/\/$/, '')}/${r2Bucket}`;
     } catch (e) {
       console.error("Failed to init AwsClient", e);
       return NextResponse.json({ error: 'R2 client init failed' }, { status: 500 });
@@ -90,7 +90,7 @@ export async function GET(request: Request) {
   try {
     for (const path of pathsToTry) {
       // Ensure no double slashes if baseUrl ends with /
-      const cleanBase = baseUrl.replace(///$/, '');
+      const cleanBase = baseUrl.replace(/\/$/, '');
       const url = `${cleanBase}/${path}`;
       triedUrls.push(url);
       
