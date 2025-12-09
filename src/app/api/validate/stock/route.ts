@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import util from 'util';
+
+const execAsync = util.promisify(exec);
 
 export const dynamic = 'force-dynamic';
 
@@ -22,18 +25,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ valid: false, reason: 'Invalid format' });
   }
 
-  return new Promise((resolve) => {
-    exec(`${pythonCmd} "${pythonScript}" "${code}"`, (error, stdout) => {
-      if (error) {
-        resolve(NextResponse.json({ valid: false, reason: 'Internal Checker Error' }, { status: 500 }));
-        return;
-      }
-      try {
-        const result = JSON.parse(stdout.trim());
-        resolve(NextResponse.json(result));
-      } catch (e) {
-        resolve(NextResponse.json({ valid: false, reason: 'Parse Error' }, { status: 500 }));
-      }
-    });
-  });
+  try {
+    const { stdout } = await execAsync(`${pythonCmd} "${pythonScript}" "${code}"`);
+    try {
+      const result = JSON.parse(stdout.trim());
+      return NextResponse.json(result);
+    } catch (e) {
+      return NextResponse.json({ valid: false, reason: 'Parse Error' }, { status: 500 });
+    }
+  } catch (error) {
+    return NextResponse.json({ valid: false, reason: 'Internal Checker Error' }, { status: 500 });
+  }
 }
