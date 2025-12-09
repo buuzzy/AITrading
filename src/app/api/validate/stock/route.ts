@@ -1,36 +1,39 @@
 import { NextResponse } from 'next/server';
+import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get('code');
 
-  // 1. Basic Format: 6 digits
-  if (!code || !/^\d{6}$/.test(code)) {
-    return NextResponse.json({ valid: false, reason: 'Invalid format (must be 6 digits)' });
+  if (!code) {
+    return NextResponse.json({ valid: false, reason: 'Missing code' }, { status: 400 });
   }
 
-  // 2. A-Share Prefix Logic
-  // Rules:
-  // SH: 60xxxx (Main), 68xxxx (Star), 5xxxxx (ETF/Fund)
-  // SZ: 00xxxx (Main), 30xxxx (ChiNext), 15xxxx (ETF)
-  // BJ: 43xxxx, 83xxxx, 87xxxx
-  
-  const validPrefixes = [
-    '60', '68', // SH Stock
-    '00', '30', '02', // SZ Stock
-    '43', '83', '87', // BJ Stock
-    '51', '56', '58', // SH ETF (Common)
-    '15', '16', '18'  // SZ ETF (Common)
-  ];
+  const pythonScript = path.join(process.cwd(), 'specs/demo/validate_stock.py');
+  const venvPython = path.join(process.cwd(), 'venv/bin/python');
+  const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
 
-  const isValidPrefix = validPrefixes.some(prefix => code.startsWith(prefix));
+  // 安全起见，只允许数字
+  if (!/^\d{6}$/.test(code)) {
+      return NextResponse.json({ valid: false, reason: 'Invalid format' });
+  }
 
-  if (!isValidPrefix) {
-    return NextResponse.json({ 
-      valid: false, 
-      reason: '请输入正确的股票代码' 
+  return new Promise((resolve) => {
+    exec(`${pythonCmd} "${pythonScript}" "${code}"`, (error, stdout) => {
+      if (error) {
+        resolve(NextResponse.json({ valid: false, reason: 'Internal Checker Error' }, { status: 500 }));
+        return;
+      }
+      try {
+        const result = JSON.parse(stdout.trim());
+        resolve(NextResponse.json(result));
+      } catch (e) {
+        resolve(NextResponse.json({ valid: false, reason: 'Parse Error' }, { status: 500 }));
+      }
     });
-  }
-
-  return NextResponse.json({ valid: true, name: `Valid Format (${code})` });
+  });
 }

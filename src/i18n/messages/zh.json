@@ -206,6 +206,35 @@
     "clear": "清除",
     "modelChat": "DeepSeek Chat (快速)",
     "modelReasoner": "DeepSeek Reasoner (深度思考)",
-    "loginRequired": "请先登录以开始回测。"
+    "loginRequired": "请先登录以开始回测。",
+    "subtitle": "生成式策略引擎 v2.0 (确定性执行)",
+    "createStrategy": "新建策略",
+    "strategyConfig": "策略配置",
+    "loaded": "已加载",
+    "empty": "空",
+    "edit": "编辑",
+    "noStrategy": "未加载策略。",
+    "openWizard": "打开向导创建策略",
+    "backtestSettings": "回测设置",
+    "runBacktest": "运行回测",
+    "running": "回测运行中...",
+    "finalEquity": "最终权益",
+    "returnPct": "收益率",
+    "logs": "执行日志",
+    "waitingLogs": "等待执行...",
+    "wizard": {
+      "titleStep1": "✨ AI 辅助策略创建",
+      "titleStep2": "🛠️ 验证配置",
+      "desc": "用自然语言描述你的交易策略。AI 将其转换为严格的执行模式。",
+      "templates": "模板：",
+      "yourPrompt": "你的描述",
+      "generatedJson": "生成的配置 (可编辑)",
+      "back": "上一步",
+      "generate": "生成策略",
+      "generating": "生成中...",
+      "apply": "应用配置",
+      "errorJson": "JSON 格式无效，请修复后应用。",
+      "errorGen": "生成失败"
+    }
   }
 }
