@@ -115,8 +115,23 @@ export const providerMap = providers
   })
   .filter((provider) => provider.id !== "google-one-tap");
 
+const isProduction = process.env.NODE_ENV === "production";
+
 export const authOptions: NextAuthConfig = {
   trustHost: true,
+  cookies: isProduction
+    ? {
+        sessionToken: {
+          name: `__Secure-authjs.session-token`,
+          options: {
+            httpOnly: true,
+            sameSite: "lax",
+            path: "/",
+            secure: true,
+          },
+        },
+      }
+    : undefined,
   providers,
   pages: {
     signIn: "/auth/signin",
