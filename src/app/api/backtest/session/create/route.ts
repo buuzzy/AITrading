@@ -31,8 +31,8 @@ export async function POST(req: Request) {
     console.log('[API] UserId:', userId);
 
     // 2. 检查积分
-    const balance = await getUserCredits(userId);
-    if (balance < 1) {
+    const userCredits = await getUserCredits(userId);
+    if (userCredits.left_credits < 1) {
       return NextResponse.json({ error: 'Insufficient credits' }, { status: 402 });
     }
 
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ sessionId: data.id, balance: balance - 1 });
+    return NextResponse.json({ sessionId: data.id, balance: userCredits.left_credits - 1 });
 
   } catch (e: any) {
     console.error('Create Session Error:', e);

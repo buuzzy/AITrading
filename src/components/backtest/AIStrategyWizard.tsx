@@ -86,7 +86,7 @@ export default function AIStrategyWizard({
 
   const handleSend = () => {
     if (input.trim()) {
-      if (credits !== null && credits < 1) {
+      if (credits != null && credits < 1) {
           alert('积分不足，请充值'); 
           return;
       }
@@ -113,7 +113,7 @@ export default function AIStrategyWizard({
       sendMessage(input, contextToSend, userIntent);
       setInput('');
       
-      if (credits !== null && onCreditsUpdate) onCreditsUpdate((credits || 0) - 1);
+      if (credits != null && onCreditsUpdate) onCreditsUpdate((credits || 0) - 1);
     }
   };
 
@@ -150,7 +150,7 @@ export default function AIStrategyWizard({
               {/* Credits Display */}
               <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-500 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800">
                   <Coins className="size-3.5" />
-                  <span>{credits !== null ? credits : '-'} {t('credits')}</span>
+                  <span>{credits != null ? credits : '-'} {t('credits')}</span>
               </div>
               <button onClick={onClose} className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
                 <X className="size-5" />
@@ -204,11 +204,11 @@ export default function AIStrategyWizard({
                 <input
                   type="text"
                   className="w-full pl-4 pr-32 py-3.5 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all disabled:opacity-50"
-                  placeholder={credits !== null && credits < 1 ? "Insufficient credits" : "Describe your strategy..."}
+                  placeholder={credits != null && credits < 1 ? "Insufficient credits" : "Describe your strategy..."}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  disabled={isLoading || (credits !== null && credits < 1)}
+                  disabled={isLoading || (credits != null && credits < 1)}
                 />
                 
                 {isLoading ? (
@@ -222,7 +222,7 @@ export default function AIStrategyWizard({
                 ) : (
                     <button
                         onClick={handleSend}
-                        disabled={!input.trim() || (credits !== null && credits < 1)}
+                        disabled={!input.trim() || (credits != null && credits < 1)}
                         className="absolute right-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors text-xs font-medium flex items-center gap-1.5"
                     >
                         <span>Send</span>
