@@ -116,6 +116,7 @@ export const providerMap = providers
   .filter((provider) => provider.id !== "google-one-tap");
 
 export const authOptions: NextAuthConfig = {
+  trustHost: true,
   providers,
   pages: {
     signIn: "/auth/signin",
