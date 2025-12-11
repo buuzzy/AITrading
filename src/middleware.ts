@@ -8,7 +8,7 @@ export default intlMiddleware;
 export const config = {
   matcher: [
     "/",
-    "/(en|en-US|zh|zh-CN|zh-TW|zh-HK|zh-MO|ja|ko|ru|fr|de|ar|es|it)/:path*",
-    "/((?!api|_next|_vercel|.*\\..*).*) "
+    "/(zh|en)/:path*",
+    "/((?!api|_next|_vercel|.*\\..*).*)"
   ],
 };
