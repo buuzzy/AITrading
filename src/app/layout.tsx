@@ -3,6 +3,7 @@ import "@/app/globals.css";
 import { getLocale, setRequestLocale } from "next-intl/server";
 import { locales } from "@/i18n/locale";
 import { cn } from "@/lib/utils";
+import ProgressBarProvider from "@/providers/progress-bar";
 
 export default async function RootLayout({
   children,
@@ -36,7 +37,9 @@ export default async function RootLayout({
           ))}
         <link rel="alternate" hrefLang="x-default" href={webUrl} />
       </head>
-      <body>{children}</body>
+      <body>
+        <ProgressBarProvider>{children}</ProgressBarProvider>
+      </body>
     </html>
   );
 }

@@ -16,18 +16,27 @@ export default async function ({ children }: { children: ReactNode }) {
   const sidebar: Sidebar = {
     nav: {
       items: [
+        /* Hidden items
         {
           title: t("user.my_orders"),
           url: "/my-orders",
           icon: "RiOrderPlayLine",
           is_active: false,
         },
+        */
         {
           title: t("my_credits.title"),
           url: "/my-credits",
           icon: "RiBankCardLine",
           is_active: false,
         },
+        {
+          title: "Backtest Records", // TODO: Add translation key
+          url: "/backtest-records",
+          icon: "RiHistoryLine",
+          is_active: false,
+        },
+        /* Hidden items
         {
           title: t("my_invites.title"),
           url: "/my-invites",
@@ -52,6 +61,7 @@ export default async function ({ children }: { children: ReactNode }) {
           icon: "RiStockLine",
           is_active: false,
         },
+        */
       ],
     },
   };

@@ -8,6 +8,36 @@
     created_at,timestamp,now(),Is_Nullable
     status,varchar,NULL,,Is_Nullable
 
+# backtest_runs
+## 记录用户回测的数据
+    Name,Type,Default Value,Constraints
+    id,uuid,gen_random_uuid(),Is_Primary_Key
+    session_id,uuid,NULL,
+    user_id,varchar,NULL,
+    strategy_config,jsonb,NULL,
+    start_date,date,NULL,Allow_Null
+    end_date,date,NULL,Allow_Null
+    initial_cash,numeric,NULL,Allow_Nullable
+    final_equity,numeric,NULL,Allow_Nullable
+    return_pct,numeric,NULL,Allow_Nullable
+    win_rate,numeric,NULL,Allow_Nullable
+    total_trades,int4,NULL,Allow_Nullable
+    max_drawdown,numeric,NULL,Allow_Nullable
+    result_summary,jsonb,NULL,Allow_Nullable
+    created_at,timestamptz,now(),
+
+# backtest_sessions
+## 记录用户的输入问题
+    Name,Type,Default Value,Constraints
+    id,uuid,gen_random_uuid(),Is_Primary_Key
+    user_id,varchar,NULL,
+    name,text,NULL,Allow_Nullable
+    symbol,text,NULL,Allow_Nullable
+    description,text,NULL,Allow_Nullable
+    is_favorite,bool,false,Allow_Nullable
+    created_at,timestamptz,now(),Is_Nullable
+    updated_at,timestamptz,now(),Is_Nullable
+
 # cashflows
 ## 实盘逐日记录，记录人工存入或取出的金额
     Name,Type,Default Value,Primary,Extra_options

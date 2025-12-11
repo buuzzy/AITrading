@@ -15,6 +15,8 @@ export enum CreditsTransType {
   OrderPay = "order_pay", // user pay for credits
   SystemAdd = "system_add", // system add credits
   Ping = "ping", // cost for ping api
+  Backtest = "backtest", // cost for backtest session
+  StrategyGenerate = "strategy_generate", // cost for AI strategy generation
 }
 
 export enum CreditsAmount {
@@ -66,7 +68,7 @@ export async function decreaseCredits({
 }) {
   try {
     let order_no = "";
-    let expired_at = "";
+    let expired_at: Date | null = null;
     let left_credits = 0;
 
     const userCredits = await getUserValidCredits(user_uuid);
@@ -78,7 +80,7 @@ export async function decreaseCredits({
         // credit enough for cost
         if (left_credits >= credits) {
           order_no = credit.order_no || "";
-          expired_at = credit.expired_at?.toISOString() || "";
+          expired_at = credit.expired_at ? new Date(credit.expired_at) : null;
           break;
         }
 
@@ -89,7 +91,7 @@ export async function decreaseCredits({
     const new_credit: typeof creditsTable.$inferInsert = {
       trans_no: getSnowId(),
       created_at: new Date(getIsoTimestr()),
-      expired_at: new Date(expired_at),
+      expired_at: expired_at, // Pass Date object or null directly
       user_uuid: user_uuid,
       trans_type: trans_type,
       credits: 0 - credits,

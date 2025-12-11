@@ -193,7 +193,7 @@
     "resume": "Resume",
     "validation_error": "Please check inputs: Symbol must be 6 digits, End Date > Start Date, Capital > 0.",
     "loginRequired": "Please login first to start a backtest.",
-    "subtitle": "Generative Strategy Engine v2.0 (Deterministic Execution)",
+    "subtitle": "Powered by Gemini 3 pro",
     "createStrategy": "Create New Strategy",
     "strategyConfig": "Strategy Config",
     "loaded": "Loaded",
@@ -209,6 +209,8 @@
     "logs": "Execution Logs",
     "waitingLogs": "Waiting for execution...",
     "wizard": {
+      "titleNew": "Strategy Builder",
+      "titleDiagnose": "AI DIAGNOSE",
       "titleStep1": "✨ Create Strategy with AI",
       "titleStep2": "🛠️ Verify Configuration",
       "desc": "Describe your trading strategy in natural language. The AI will convert it into a strict execution schema.",
@@ -221,6 +223,13 @@
       "apply": "Apply Configuration",
       "errorJson": "Invalid JSON format. Please fix before applying.",
       "errorGen": "Failed to generate strategy"
-    }
+    },
+    "credits": "Credits",
+    "recordsTitle": "Backtest Records",
+    "sessionName": "Strategy Name",
+    "symbol": "Symbol",
+    "lastRun": "Last Run",
+    "emptyRecords": "No records found",
+    "winRate": "Win Rate"
   }
 }

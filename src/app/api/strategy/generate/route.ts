@@ -2,11 +2,43 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { auth } from "@/auth";
+import { getUserCredits, decreaseCredits, CreditsTransType } from "@/services/credit";
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
+    // 1. Authenticate & Deduct Credits
+    const session = await auth();
+    if (!session?.user?.uuid) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userId = session.user.uuid;
+    const userCredits = await getUserCredits(userId);
+
+    // Strict Check: Ensure user has enough credits
+    if (userCredits.left_credits < 1) {
+      return NextResponse.json({ 
+        error: 'Insufficient credits',
+        details: 'You need at least 1 credit to generate a strategy.' 
+      }, { status: 402 }); // 402 Payment Required
+    }
+
+    // Deduct Credit
+    try {
+        await decreaseCredits({
+            user_uuid: userId,
+            trans_type: CreditsTransType.StrategyGenerate,
+            credits: 1
+        });
+    } catch (e) {
+        console.error('Credit deduction failed:', e);
+        return NextResponse.json({ error: 'Transaction failed' }, { status: 500 });
+    }
+
+    // 2. Parse Request
     const { messages } = await request.json();
 
     if (!messages || !Array.isArray(messages)) {

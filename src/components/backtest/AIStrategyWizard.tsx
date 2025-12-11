@@ -1,19 +1,22 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Brain, Send, Sparkles, X, Check, ChevronRight } from 'lucide-react';
+import { Brain, Send, Sparkles, X, Check, ChevronRight, Square, Coins, Loader2 } from 'lucide-react';
 import { useAIStrategy, Message } from '@/hooks/use-ai-strategy';
+import { useTranslations } from 'next-intl';
 
 interface AIStrategyWizardProps {
   isOpen: boolean;
   onClose: () => void;
-  onApply: (strategy: any) => void;
-  hiddenContext?: string; // Replaced by diagnosisContext in new flow, but kept for compatibility
-  diagnosisContext?: { report: string, summary: string }; // New structured context
+  onApply: (strategy: any) => Promise<void>; 
+  hiddenContext?: string;
+  diagnosisContext?: { report: string, summary: string };
   userIntent?: string; 
   history?: Message[];
   onHistoryChange?: (msgs: Message[]) => void;
   onUserQuery?: (query: string) => void;
+  credits?: number | null;
+  onCreditsUpdate?: (newCredits: number) => void;
 }
 
 export default function AIStrategyWizard({
@@ -25,17 +28,25 @@ export default function AIStrategyWizard({
   userIntent,
   history, 
   onHistoryChange,
-  onUserQuery
+  onUserQuery,
+  credits,
+  onCreditsUpdate
 }: AIStrategyWizardProps) {
-  const { messages, isLoading, sendMessage, setMessages } = useAIStrategy({
+  const t = useTranslations('Backtest');
+  const { messages, isLoading, sendMessage, setMessages, stop } = useAIStrategy({
     initialHistory: history,
     onHistoryChange: onHistoryChange
   });
 
   const [input, setInput] = useState('');
+  // credits is now a prop
+  const [isApplying, setIsApplying] = useState(false); 
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasInitialized = useRef(false);
   const lastSentContextRef = useRef<string>('');
+
+  // No internal fetch for credits anymore
 
   // Initialize Logic
   useEffect(() => {
@@ -44,20 +55,17 @@ export default function AIStrategyWizard({
         hasInitialized.current = true;
         
         if (diagnosisContext) {
-          // DIAGNOSIS MODE: Interactive Start
           setMessages([{
             role: 'assistant',
             content: `🤖 **策略诊断就绪**\n\n${diagnosisContext.summary}\n\n请告诉我您希望如何优化？\n例如：\n- "收益太低，想激进一点"\n- "回撤太大，想稳健一点"\n- "交易太少，想捕捉更多机会"`
           }]);
         } else if (hiddenContext) {
-          // LEGACY MODE: Auto-start (Fallback)
           sendMessage(
             "策略表现不佳，请根据回测报告进行诊断和优化。", 
             hiddenContext, 
             userIntent
           );
         } else {
-          // CREATION MODE: Welcome message
           setMessages([{ 
             role: 'assistant', 
             content: "你好！我是你的 AI 策略顾问。请描述你的交易想法（例如：做超跌反弹，或者均线趋势），我会帮你设计并生成可执行的策略配置。" 
@@ -65,6 +73,8 @@ export default function AIStrategyWizard({
         }
       }
     } else {
+      // Always reset initialization state when closed.
+      // The protection against double-init is handled by (messages.length === 0) check above.
       hasInitialized.current = false;
     }
   }, [isOpen, diagnosisContext, hiddenContext, userIntent, messages.length, sendMessage, setMessages]); 
@@ -76,7 +86,11 @@ export default function AIStrategyWizard({
 
   const handleSend = () => {
     if (input.trim()) {
-      // Capture intent if first user msg
+      if (credits !== null && credits < 1) {
+          alert('积分不足，请充值'); 
+          return;
+      }
+
       const userMsgCount = messages.filter(m => m.role === 'user').length;
       if (userMsgCount === 0 && onUserQuery) {
           onUserQuery(input);
@@ -84,48 +98,64 @@ export default function AIStrategyWizard({
 
       let contextToSend: string | undefined = undefined;
 
-      // Construct Diagnosis Context if available
       if (diagnosisContext) {
-        // Safe access to strategy_config (it might be injected as string or object, handle both if needed, but assuming string based on previous page.tsx change)
-        // In page.tsx: strategy_config: JSON.stringify(strategyConfig, null, 2)
         const configStr = (diagnosisContext as any).strategy_config || '';
         const reportStr = diagnosisContext.report || '';
-        
         const fullContext = `[CURRENT STRATEGY CONFIG]\n${configStr}\n\n[LATEST BACKTEST REPORT]\n${reportStr}`;
-        
-        // Check if we need to send this context (if it changed or hasn't been sent)
         if (fullContext !== lastSentContextRef.current) {
             contextToSend = fullContext;
             lastSentContextRef.current = fullContext;
         }
       } else if (hiddenContext && userMsgCount === 0) {
-        // Fallback for legacy hiddenContext (only on first message)
         contextToSend = hiddenContext;
       }
       
       sendMessage(input, contextToSend, userIntent);
-      
       setInput('');
+      
+      if (credits !== null && onCreditsUpdate) onCreditsUpdate((credits || 0) - 1);
+    }
+  };
+
+  const handleApply = async () => {
+    const lastStratMsg = [...messages].reverse().find(m => m.strategyJson);
+    if (!lastStratMsg) return;
+
+    setIsApplying(true);
+    try {
+        await onApply(lastStratMsg.strategyJson);
+        onClose();
+    } catch (error) {
+        console.error('Apply failed', error);
+    } finally {
+        setIsApplying(false);
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md">
-      <div className="w-full max-w-6xl h-[85vh] bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+      <div className="w-full max-w-6xl h-[90vh] bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 flex flex-col relative">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center bg-zinc-50 dark:bg-zinc-900/50">
           <div className="flex items-center gap-2">
             <Sparkles className="size-5 text-purple-500" />
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-              DeepSeek R1 Strategy Builder
+              {diagnosisContext ? t('wizard.titleDiagnose') : t('wizard.titleNew')}
             </h2>
           </div>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
-            <X className="size-5" />
-          </button>
+          <div className="flex items-center gap-4">
+              {/* Credits Display */}
+              <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-500 rounded-full text-xs font-bold border border-amber-200 dark:border-amber-800">
+                  <Coins className="size-3.5" />
+                  <span>{credits !== null ? credits : '-'} {t('credits')}</span>
+              </div>
+              <button onClick={onClose} className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+                <X className="size-5" />
+              </button>
+          </div>
         </div>
 
         {/* Main Content Area: Split View */}
@@ -146,7 +176,7 @@ export default function AIStrategyWizard({
                     <div className="whitespace-pre-wrap">{m.content}</div>
                   </div>
 
-                  {/* Reasoning Collapsible (Only for assistant) */}
+                  {/* Reasoning Collapsible */}
                   {m.role === 'assistant' && m.reasoning && (
                     <div className="mt-2 max-w-[90%]">
                       <details className="group">
@@ -173,24 +203,34 @@ export default function AIStrategyWizard({
               <div className="relative flex items-center">
                 <input
                   type="text"
-                  className="w-full pl-4 pr-12 py-3.5 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all"
-                  placeholder="Describe your strategy (e.g., 'Buy dip in super trend...'))"
+                  className="w-full pl-4 pr-32 py-3.5 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 outline-none transition-all disabled:opacity-50"
+                  placeholder={credits !== null && credits < 1 ? "Insufficient credits" : "Describe your strategy..."}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                  disabled={isLoading}
+                  disabled={isLoading || (credits !== null && credits < 1)}
                 />
-                <button
-                  onClick={handleSend}
-                  disabled={!input.trim() || isLoading}
-                  className="absolute right-2 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors"
-                >
-                  {isLoading ? (
-                    <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : (
-                    <Send className="size-4" />
-                  )}
-                </button>
+                
+                {isLoading ? (
+                    <button
+                        onClick={stop}
+                        className="absolute right-2 px-3 py-1.5 bg-red-500/10 text-red-600 hover:bg-red-500/20 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors border border-red-500/20"
+                    >
+                        <Square className="size-3 fill-current" />
+                        Stop
+                    </button>
+                ) : (
+                    <button
+                        onClick={handleSend}
+                        disabled={!input.trim() || (credits !== null && credits < 1)}
+                        className="absolute right-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors text-xs font-medium flex items-center gap-1.5"
+                    >
+                        <span>Send</span>
+                        {/* Only show cost if needed, user said 'hardcoded cost is 1' but Apply is 0 */}
+                        <span className="opacity-70 font-normal border-l border-white/20 pl-1.5 ml-0.5">-1 {t('credits')}</span>
+                        <Send className="size-3" />
+                    </button>
+                )}
               </div>
             </div>
           </div>
@@ -218,15 +258,21 @@ export default function AIStrategyWizard({
               </div>
               <div className="p-4 border-t border-zinc-200 dark:border-zinc-800">
                 <button
-                  onClick={() => {
-                    const lastStratMsg = [...messages].reverse().find(m => m.strategyJson);
-                    if (lastStratMsg) onApply(lastStratMsg.strategyJson);
-                    onClose();
-                  }}
-                  className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-xl font-medium shadow-lg shadow-green-600/20 transition-all flex items-center justify-center gap-2"
+                  onClick={handleApply}
+                  disabled={isApplying}
+                  className="w-full py-3 bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-xl font-medium shadow-lg shadow-green-600/20 transition-all flex items-center justify-center gap-2"
                 >
-                  <Check className="size-4" />
-                  Apply Strategy
+                  {isApplying ? (
+                    <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Creating Session...
+                    </>
+                  ) : (
+                    <>
+                        <Check className="size-4" />
+                        {t('wizard.apply')}
+                    </>
+                  )}
                 </button>
               </div>
             </div>

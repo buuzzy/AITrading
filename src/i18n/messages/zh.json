@@ -207,7 +207,7 @@
     "modelChat": "DeepSeek Chat (快速)",
     "modelReasoner": "DeepSeek Reasoner (深度思考)",
     "loginRequired": "请先登录以开始回测。",
-    "subtitle": "生成式策略引擎 v2.0 (确定性执行)",
+    "subtitle": "Powered by Gemini 3 pro",
     "createStrategy": "新建策略",
     "strategyConfig": "策略配置",
     "loaded": "已加载",
@@ -223,6 +223,8 @@
     "logs": "执行日志",
     "waitingLogs": "等待执行...",
     "wizard": {
+      "titleNew": "新建策略",
+      "titleDiagnose": "策略诊断",
       "titleStep1": "✨ AI 辅助策略创建",
       "titleStep2": "🛠️ 验证配置",
       "desc": "用自然语言描述你的交易策略。AI 将其转换为严格的执行模式。",
@@ -235,6 +237,13 @@
       "apply": "应用配置",
       "errorJson": "JSON 格式无效，请修复后应用。",
       "errorGen": "生成失败"
-    }
+    },
+    "credits": "积分",
+    "recordsTitle": "回测记录",
+    "sessionName": "策略名称",
+    "symbol": "标的",
+    "lastRun": "最近运行",
+    "emptyRecords": "暂无记录",
+    "winRate": "胜率"
   }
 }
