@@ -10,14 +10,14 @@ export default auth((req) => {
   const { pathname } = req.nextUrl;
 
   // Explicitly protect /backtest routes (including localized versions like /zh/backtest)
-  if (pathname.includes('/backtest')) {
-    if (!isAuth) {
-      // Redirect to sign-in page, preserving the return URL
-      const signInUrl = new URL("/auth/signin", req.url);
-      signInUrl.searchParams.set("callbackUrl", pathname);
-      return NextResponse.redirect(signInUrl);
-    }
-  }
+  // if (pathname.includes('/backtest')) {
+  //   if (!isAuth) {
+  //     // Redirect to sign-in page, preserving the return URL
+  //     const signInUrl = new URL("/auth/signin", req.url);
+  //     signInUrl.searchParams.set("callbackUrl", pathname);
+  //     return NextResponse.redirect(signInUrl);
+  //   }
+  // }
 
   return intlMiddleware(req);
 });
