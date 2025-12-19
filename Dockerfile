@@ -45,6 +45,21 @@ RUN addgroup --system --gid 1001 nodejs && \
     mkdir .next && \
     chown nextjs:nodejs .next
 
+# Install Python and dependencies
+RUN apk add --no-cache python3 py3-pip
+
+# Copy python requirements and install
+COPY --from=builder --chown=nextjs:nodejs /app/requirements.txt ./
+COPY --from=builder --chown=nextjs:nodejs /app/specs ./specs
+
+# Create venv and install dependencies
+RUN apk add --no-cache --virtual .build-deps build-base python3-dev && \
+    python3 -m venv venv && \
+    . venv/bin/activate && \
+    pip install -r requirements.txt && \
+    apk del .build-deps && \
+    chown -R nextjs:nodejs venv
+
 # COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static

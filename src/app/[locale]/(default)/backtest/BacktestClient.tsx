@@ -7,6 +7,7 @@ import { RotateCcw, History, AlertCircle, Info, CheckCircle } from 'lucide-react
 import { ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { createClient } from '@supabase/supabase-js';
 import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 
 // --- Types ---
 interface StrategySnapshot {
@@ -30,8 +31,28 @@ interface BacktestClientProps {
 // --- Main Page Component ---
 export default function BacktestClient({ initialCredits }: BacktestClientProps) {
   const t = useTranslations('Backtest');
-  const { data: session } = useSession(); // Access user session
+  const router = useRouter();
+  const { data: session, status } = useSession(); // Access user session
   const [isWizardOpen, setIsWizardOpen] = useState(false);
+  
+  // Auth Check
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin?callbackUrl=/backtest');
+    }
+  }, [status, router]);
+
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-base-200">
+        <span className="loading loading-spinner loading-lg text-primary"></span>
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated') {
+    return null;
+  }
   
   // Core State
   const [strategyConfig, setStrategyConfig] = useState<any>(null);
