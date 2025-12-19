@@ -59,6 +59,27 @@ export async function POST(request: Request) {
 
     const stream = new ReadableStream({
       start(controller) {
+        let isClosed = false;
+
+        const safeEnqueue = (data: Uint8Array | string) => {
+          if (isClosed) return;
+          try {
+            controller.enqueue(data);
+          } catch (e) {
+            console.warn('[Strategy Stream] Enqueue failed (stream likely closed):', e);
+          }
+        };
+
+        const safeClose = () => {
+          if (isClosed) return;
+          isClosed = true;
+          try {
+            controller.close();
+          } catch (e) {
+            console.warn('[Strategy Stream] Close failed:', e);
+          }
+        };
+
         // Remove 'messagesJson' from args, we will write it to stdin
         const child = spawn(pythonCmd, ['-u', pythonScript]);
 
@@ -68,7 +89,7 @@ export async function POST(request: Request) {
         // ---------------------
 
         child.stdout.on('data', (data) => {
-          controller.enqueue(data);
+          safeEnqueue(data);
         });
 
         child.stderr.on('data', (data) => {
@@ -82,13 +103,13 @@ export async function POST(request: Request) {
              // Usually the script itself would have printed an error JSON before exiting.
              console.log(`[Strategy Chat] Exited with code ${code}`);
           }
-          controller.close();
+          safeClose();
         });
 
         child.on('error', (err) => {
           const errorJson = JSON.stringify({ type: 'error', message: `Spawn Error: ${err.message}` }) + "\n";
-          controller.enqueue(encoder.encode(errorJson));
-          controller.close();
+          safeEnqueue(encoder.encode(errorJson));
+          safeClose();
         });
       }
     });

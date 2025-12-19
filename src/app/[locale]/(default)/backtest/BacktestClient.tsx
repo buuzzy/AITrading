@@ -35,25 +35,6 @@ export default function BacktestClient({ initialCredits }: BacktestClientProps) 
   const { data: session, status } = useSession(); // Access user session
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   
-  // Auth Check
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/auth/signin?callbackUrl=/backtest');
-    }
-  }, [status, router]);
-
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-base-200">
-        <span className="loading loading-spinner loading-lg text-primary"></span>
-      </div>
-    );
-  }
-
-  if (status === 'unauthenticated') {
-    return null;
-  }
-  
   // Core State
   const [strategyConfig, setStrategyConfig] = useState<any>(null);
   const [symbol, setSymbol] = useState('000001');
@@ -90,47 +71,118 @@ export default function BacktestClient({ initialCredits }: BacktestClientProps) 
   const [snapshotToRestore, setSnapshotToRestore] = useState<StrategySnapshot | null>(null);
   const [credits, setCredits] = useState<number | null>(initialCredits);
 
-  // Load credits on mount
+  // Auth Check
   useEffect(() => {
-    // Only fetch if we didn't get initial credits (e.g. strict null check, or just refresh logic)
-    // Here we re-fetch to ensure sync, but initial render is fast.
-    if (session?.user) {
-        fetch('/api/credits/balance')
-            .then(res => res.json())
-            .then(data => setCredits(data.balance))
-            .catch(e => console.error('Failed to load credits', e));
+    if (status === 'unauthenticated') {
+      router.push('/auth/signin?callbackUrl=/backtest');
     }
-  }, [session]);
+  }, [status, router]);
 
-  // --- Helper Functions ---
-  const showToast = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
-    const id = crypto.randomUUID();
-    setToasts(prev => [...prev, { id, type, text }]);
-    setTimeout(() => {
-        setToasts(prev => prev.filter(t => t.id !== id));
-    }, 3000);
-  };
+    // Load credits on mount
 
-  const checkStock = useCallback(async (code: string) => {
-    if (code.length !== 6) return;
-    
-    setIsValidating(true);
-    try {
-      const res = await fetch(`/api/validate/stock?code=${code}`);
-      const data = await res.json();
-      if (data.valid) {
-        setIsValidStock(true);
-        setStockName(data.name);
-      } else {
-        setIsValidStock(false);
-        setStockName('');
+    useEffect(() => {
+
+      // Only fetch if we didn't get initial credits (e.g. strict null check, or just refresh logic)
+
+      // Here we re-fetch to ensure sync, but initial render is fast.
+
+      if (session?.user) {
+
+          fetch('/api/credits/balance')
+
+              .then(res => res.json())
+
+              .then(data => setCredits(data.balance))
+
+              .catch(e => console.error('Failed to load credits', e));
+
       }
-    } catch (e) {
-      setIsValidStock(false);
-    } finally {
-      setIsValidating(false);
+
+    }, [session]);
+
+  
+
+    // --- Helper Functions ---
+
+    const showToast = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
+
+      const id = crypto.randomUUID();
+
+      setToasts(prev => [...prev, { id, type, text }]);
+
+      setTimeout(() => {
+
+          setToasts(prev => prev.filter(t => t.id !== id));
+
+      }, 3000);
+
+    };
+
+  
+
+    const checkStock = useCallback(async (code: string) => {
+
+      if (code.length !== 6) return;
+
+      
+
+      setIsValidating(true);
+
+      try {
+
+        const res = await fetch(`/api/validate/stock?code=${code}`);
+
+        const data = await res.json();
+
+        if (data.valid) {
+
+          setIsValidStock(true);
+
+          setStockName(data.name);
+
+        } else {
+
+          setIsValidStock(false);
+
+          setStockName('');
+
+        }
+
+      } catch (e) {
+
+        setIsValidStock(false);
+
+      } finally {
+
+        setIsValidating(false);
+
+      }
+
+    }, []);
+
+  
+
+    if (status === 'loading') {
+
+      return (
+
+        <div className="min-h-screen flex items-center justify-center bg-base-200">
+
+          <span className="loading loading-spinner loading-lg text-primary"></span>
+
+        </div>
+
+      );
+
     }
-  }, []);
+
+  
+
+    if (status === 'unauthenticated') {
+
+      return null;
+
+    }
 
   // Handle Symbol Input Change
   const handleSymbolChange = (e: React.ChangeEvent<HTMLInputElement>) => {

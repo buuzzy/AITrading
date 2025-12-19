@@ -118,7 +118,9 @@ def execute_backtest_v2(
             pos = portfolio.positions[norm_symbol]
             pos_info = {
                 'quantity': pos.quantity,
-                'entry_price': pos.entry_price
+                'entry_price': pos.entry_price,
+                'highest_price': getattr(pos, 'highest_price', pos.entry_price),
+                'buy_date': getattr(pos, 'buy_date', None)
             }
 
         # Call Brain

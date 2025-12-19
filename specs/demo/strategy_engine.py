@@ -152,6 +152,26 @@ class IndicatorLibrarian:
                 df[name] = df[base_name].shift(1)
             return
 
+        # 10. Rolling High/Low (New!)
+        match_hl = re.match(r'(high|low)_(\d+)$', name)
+        if match_hl:
+            type_, period = match_hl.groups()
+            period = int(period)
+            if type_ == 'high':
+                df[name] = df['high'].rolling(window=period).max()
+            elif type_ == 'low':
+                df[name] = df['low'].rolling(window=period).min()
+            return
+            
+        # 11. Bollinger Bandwidth (New!)
+        if name == 'boll_width':
+            if 'boll_upper' not in df.columns: self._calculate_indicator('boll_upper', df)
+            # Standard Bandwidth: (Upper - Lower) / Mid
+            # But let's just make sure components exist, usually user does (Upper - Lower) manually
+            # If user asks for 'boll_width', we give them (Upper - Lower) / Mid
+            df[name] = (df['boll_upper'] - df['boll_lower']) / df['boll_mid']
+            return
+
 # === 3. The Brain (Evaluator) ===
 class StrategyEvaluator:
     def __init__(self, strategy_json: Union[str, Dict[str, Any]]):
@@ -168,6 +188,58 @@ class StrategyEvaluator:
         if 'open' not in df.columns: df['open'] = df['close']
         if 'vol' not in df.columns: df['vol'] = 0 # Safety
         return self.librarian.parse_and_calculate(self.config, df)
+
+    def validate(self) -> List[str]:
+        """
+        Scans the config for unsupported indicators.
+        Returns a list of invalid indicator names found.
+        """
+        needed = set()
+        self.librarian._extract_indicators_from_rule(self.config, needed) # This is a bit recursive, let's fix it below
+        
+        # Better scan logic for validation
+        all_tokens = set()
+        
+        def scan_rules(rules):
+            for r in rules:
+                if 'rules' in r: 
+                    scan_rules(r['rules'])
+                else:
+                    if 'indicator' in r: all_tokens.add(r['indicator'])
+                    if 'value' in r and isinstance(r['value'], str):
+                        tokens = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', r['value'])
+                        for t in tokens: all_tokens.add(t)
+
+        scan_rules(self.config.get('entry_rules', []))
+        scan_rules(self.config.get('exit_rules', {}).get('signals', []))
+
+        # Hardcoded Whitelist (should match Librarian's regex/logic)
+        known_bases = {
+            'close', 'open', 'high', 'low', 'vol', 'volume', 'date',
+            'pnl_pct', 'position_highest', 'holding_days', 'current_price', 'boll_width'
+        }
+        
+        invalid = []
+        for token in all_tokens:
+            if token in known_bases: continue
+            if token.isdigit(): continue
+            
+            # Check Patterns
+            is_valid_pattern = any([
+                re.match(r'^(ema|sma)_(\d+)$', token),
+                re.match(r'^(ema|sma)_vol_(\d+)$', token),
+                re.match(r'^rsi_(\d+)$', token),
+                re.match(r'^cci(_\d+)?$', token),
+                re.match(r'^atr_(\d+)$', token),
+                re.match(r'^(high|low)_(\d+)$', token),
+                re.match(r'^prev_', token),
+                token in ['boll_upper', 'boll_lower', 'boll_mid', 'macd', 'macd_dif', 'macd_dea', 'kdj_k', 'kdj_d', 'kdj_j']
+            ])
+            
+            if not is_valid_pattern:
+                invalid.append(token)
+        
+        return invalid
 
     def _resolve_math_expression(self, expression: Union[str, float, int], row: pd.Series) -> float:
         if isinstance(expression, (int, float)):
